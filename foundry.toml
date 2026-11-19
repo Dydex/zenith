@@ -1,0 +1,30 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.26"
+evm_version = "cancun" # Uniswap v4 relies on transient storage (EIP-1153)
+optimizer = true
+optimizer_runs = 800
+bytecode_hash = "none"
+ffi = false
+
+[fuzz]
+runs = 1000
+
+[invariant]
+runs = 256
+depth = 128
+fail_on_revert = false
+
+# Heavier settings for CI and for evidence runs.
+[profile.ci.fuzz]
+runs = 10000
+
+[profile.ci.invariant]
+runs = 512
+depth = 256
+
+[fmt]
+line_length = 120
+sort_imports = true
