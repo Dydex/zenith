@@ -25,7 +25,7 @@ Zenith settles curator scores, fees and bonds in periods. Reactive Network close
 
 - [x] Sleeve registry with a passive control sleeve, bound to one pool
 - [x] ERC-6909 idle-balance ledger per sleeve (fuzz-tested: ledger always equals claims)
-- [ ] Per-sleeve positions executed from curator shapes
+- [x] Curator shapes executed as hook-owned positions, one salt per sleeve (fuzz-tested against random swaps)
 - [ ] Fee attribution test: each sleeve matches a standalone v4 position to the wei
 - [ ] Skill scoring against the control, scaled to deployed liquidity
 - [ ] Symmetric curator fee with a bond
