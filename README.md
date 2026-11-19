@@ -14,7 +14,9 @@ In Zenith, curators never hold funds. A curator posts a liquidity shape and the 
 
 ## Roadmap
 
-- [ ] Per-sleeve positions and ERC-6909 idle-balance ledger
+- [x] Sleeve registry with a passive control sleeve, bound to one pool
+- [x] ERC-6909 idle-balance ledger per sleeve (fuzz-tested: ledger always equals claims)
+- [ ] Per-sleeve positions executed from curator shapes
 - [ ] Fee attribution test: each sleeve matches a standalone v4 position to the wei
 - [ ] Skill scoring against the control, scaled to deployed liquidity
 - [ ] Symmetric curator fee with a bond
