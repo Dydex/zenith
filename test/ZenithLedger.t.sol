@@ -7,29 +7,11 @@ import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
-import {Test} from "forge-std/Test.sol";
-import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {ZenithHook} from "../src/ZenithHook.sol";
+import {ZenithTestBase} from "./utils/ZenithTestBase.sol";
 
-contract ZenithLedgerTest is Test, Deployers {
-    ZenithHook hook;
-    address constant HOOK_ADDRESS = address(uint160(Hooks.BEFORE_INITIALIZE_FLAG) | (uint160(0x4444) << 144));
-
-    function setUp() public {
-        deployFreshManagerAndRouters();
-        (currency0, currency1) = deployMintAndApprove2Currencies();
-
-        deployCodeTo("ZenithHook.sol:ZenithHook", abi.encode(manager), HOOK_ADDRESS);
-        hook = ZenithHook(HOOK_ADDRESS);
-
-        MockERC20(Currency.unwrap(currency0)).approve(address(hook), type(uint256).max);
-        MockERC20(Currency.unwrap(currency1)).approve(address(hook), type(uint256).max);
-
-        (key,) = initPool(currency0, currency1, IHooks(address(hook)), 3000, SQRT_PRICE_1_1);
-    }
-
+contract ZenithLedgerTest is ZenithTestBase {
     // ------------------------------------------------------------------
     // Binding
     // ------------------------------------------------------------------
@@ -138,9 +120,7 @@ contract ZenithLedgerTest is Test, Deployers {
             expected1[id] += a1;
         }
 
-        (uint256 total0, uint256 total1) = hook.totalIdle();
-        assertEq(total0, manager.balanceOf(address(hook), currency0.toId()), "ledger0 == claims0");
-        assertEq(total1, manager.balanceOf(address(hook), currency1.toId()), "ledger1 == claims1");
+        _assertLedgerEqualsClaims();
         for (uint256 id; id <= n; ++id) {
             ZenithHook.Sleeve memory s = hook.getSleeve(id);
             assertEq(s.idle0, expected0[id], "sleeve credited exactly (token0)");
