@@ -26,7 +26,7 @@ Zenith settles curator scores, fees and bonds in periods. Reactive Network close
 - [x] Sleeve registry with a passive control sleeve, bound to one pool
 - [x] ERC-6909 idle-balance ledger per sleeve (fuzz-tested: ledger always equals claims)
 - [x] Curator shapes executed as hook-owned positions, one salt per sleeve (fuzz-tested against random swaps)
-- [ ] Fee attribution test: each sleeve matches a standalone v4 position to the wei
+- [x] Fee attribution test: each sleeve, and the control, matches a standalone v4 position to the wei (fuzz-tested, mutation-checked)
 - [ ] Skill scoring against the control, scaled to deployed liquidity
 - [ ] Symmetric curator fee with a bond
 - [ ] Settlement price clamp and forced-close safety
@@ -43,3 +43,9 @@ forge test
 ```
 
 Requires [Foundry](https://book.getfoundry.sh/).
+
+To check that the fee tests can actually catch accounting bugs, run the mutation check. It plants one deliberate bug at a time in the hook and expects the twin fee tests to fail on each:
+
+```bash
+script/mutation.sh
+```
