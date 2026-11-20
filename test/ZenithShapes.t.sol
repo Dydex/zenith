@@ -231,18 +231,4 @@ contract ZenithShapesTest is ZenithTestBase {
         hook.poke(bystander);
         _assertLedgerEqualsClaims();
     }
-
-    /// @dev Up to MAX_RANGES distinct, aligned ranges within +-3000 ticks, each small enough to afford.
-    function _randomShape(uint256 seed) internal view returns (ZenithHook.Range[] memory shape) {
-        uint256 n = bound(seed, 0, hook.MAX_RANGES());
-        shape = new ZenithHook.Range[](n);
-        for (uint256 i; i < n; ++i) {
-            uint256 r = uint256(keccak256(abi.encode(seed, i)));
-            // Distinct by construction: each index gets its own lower tick band.
-            int24 lower = -3000 + int24(int256(i)) * 600 + int24(int256(bound(r, 0, 9))) * 60;
-            int24 upper = lower + int24(int256(bound(r >> 32, 1, 20))) * 60;
-            uint128 liquidity = uint128(bound(r >> 64, 1e12, 2e18));
-            shape[i] = _range(lower, upper, liquidity);
-        }
-    }
 }
