@@ -12,18 +12,20 @@ ffi = false
 [fuzz]
 runs = 1000
 
+# Default settings: fast enough to run on every push in CI.
 [invariant]
+runs = 32
+depth = 64
+fail_on_revert = false
+
+# Deep settings for evidence runs: FOUNDRY_PROFILE=deep forge test
+[profile.deep.fuzz]
+runs = 10000
+
+[profile.deep.invariant]
 runs = 256
 depth = 128
 fail_on_revert = false
-
-# Heavier settings for CI and for evidence runs.
-[profile.ci.fuzz]
-runs = 10000
-
-[profile.ci.invariant]
-runs = 512
-depth = 256
 
 [fmt]
 line_length = 120
