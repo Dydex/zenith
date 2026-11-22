@@ -8,9 +8,19 @@ Zenith is a Uniswap v4 hook for curated liquidity, built for the Uniswap Hook In
 
 ## The idea
 
-Curated LP vaults are judged and paid on total value. That mostly measures which tokens a vault held while prices moved, not how well it made markets.
+Curated LP vaults are judged on total return, which mostly measures which tokens a vault held while prices moved, and their operators usually take a cut of trading fees whether or not they added anything. Neither measures how well a vault made markets.
 
-In Zenith, curators never hold funds. A curator posts a liquidity shape and the hook executes it in that curator's own sleeve of a shared pool, next to a passive control sleeve that is never touched. Every sleeve faces the same swaps, so the comparison is fair. The hook scores each sleeve's market-making skill against the control and pays curators only for the excess.
+In Zenith, curators never hold funds. A curator posts a liquidity shape and the hook executes it in that curator's own sleeve of a shared pool, next to a passive control sleeve that is never touched. Every sleeve faces the same swaps. The scoring being built will measure each sleeve's market-making skill against the control and pay curators only for the excess.
+
+## Evidence
+
+We found 57 managed-vault contracts on three mainnet ETH/stablecoin pools (2021 to 2024) and studied the six with meaningful size and history:
+
+- **None showed statistically significant skill over a passive LP.**
+- **In at least four, the operator or protocol still took a cut of every fee collected.**
+- **Skill explained only 14% of the weekly variation in total return against passive.**
+
+Method, limits, corrections and an offline re-run are in [evidence/](evidence/README.md).
 
 ## Partner integration: Reactive Network (planned)
 
@@ -28,7 +38,9 @@ Zenith settles curator scores, fees and bonds in periods. Reactive Network close
 - [x] Curator shapes executed as hook-owned positions, one salt per sleeve (fuzz-tested against random swaps)
 - [x] Fee attribution test: each sleeve, and the control, matches a standalone v4 position to the wei (fuzz-tested, mutation-checked)
 - [x] Stateful invariant tests: the ledger equals the claims, stored positions match the pool, curators never hold funds, the hook holds no loose tokens, and fees never decrease (deep run: 256 runs of 128 random actions, all held)
-- [ ] Skill scoring against the control, scaled to deployed liquidity
+- [x] Mainnet evidence, reproducible offline
+- [x] Benchmark requirement pinned by test: a static narrow range must not count as skill
+- [ ] Skill scoring against the control that is neutral to concentration and gives idle curators nothing
 - [ ] Symmetric curator fee with a bond
 - [ ] Settlement price clamp and forced-close safety
 - [ ] Attack tests (wash trading, price pushes, idle curators)
@@ -38,7 +50,7 @@ Zenith settles curator scores, fees and bonds in periods. Reactive Network close
 ## Build and test
 
 ```bash
-git clone --recursive <repo-url>
+git clone --recursive https://github.com/Dydex/zenith.git
 forge build
 forge test
 ```
