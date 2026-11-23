@@ -40,7 +40,8 @@ Zenith settles curator scores, fees and bonds in periods. Reactive Network close
 - [x] Stateful invariant tests: the ledger equals the claims, stored positions match the pool, curators never hold funds, the hook holds no loose tokens, and fees never decrease (deep run: 256 runs of 128 random actions, all held)
 - [x] Mainnet evidence, reproducible offline
 - [x] Benchmark requirement pinned by test: a static narrow range must not count as skill
-- [ ] Skill scoring against the control that is neutral to concentration and gives idle curators nothing
+- [x] Scoring rule chosen by attacking six candidates with history-only strategies on mainnet data ([evidence](evidence/README.md#choosing-the-scoring-rule))
+- [ ] Skill scoring in the hook: liquidity changes since period start, times the control's per-liquidity result above its long-run average
 - [ ] Symmetric curator fee with a bond
 - [ ] Settlement price clamp and forced-close safety
 - [ ] Attack tests (wash trading, price pushes, idle curators)

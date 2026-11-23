@@ -50,10 +50,24 @@ The main specification was fixed before this dataset was analysed, though after 
 
 ## What this changed in Zenith
 
-A concentrated position has several times the liquidity per dollar, so it multiplies both fees and losses. Compared with the control per unit of capital, a curator who posts one narrow range and never moves it looks skilled in a choppy market and negligent in a trend. [`test/ZenithBenchmark.t.sol`](../test/ZenithBenchmark.t.sol) shows this on a real PoolManager and shows that a per-liquidity comparison gives that curator zero. Two requirements follow for the scoring rule:
+A concentrated position has several times the liquidity per dollar, so it multiplies both fees and losses. Compared with the control per unit of capital, a curator who posts one narrow range and never moves it looks skilled in a choppy market and negligent in a trend. [`test/ZenithBenchmark.t.sol`](../test/ZenithBenchmark.t.sol) shows this on a real PoolManager and shows that a per-liquidity comparison gives that curator zero. Two requirements follow for the scoring rule, and the rule chosen below meets both:
 
 1. It must not reward or punish concentration by itself.
 2. It must checkpoint at every deposit, withdrawal and reshape, so token-mix changes do not count as skill.
+
+## Choosing the scoring rule
+
+Per unit of in-range liquidity every position earns the same result, so a curator's only lever is how much liquidity it keeps in range, and when. [`scripts/scoring.py`](scripts/scoring.py) attacks six candidate rules on 2,653 pool-days of mainnet data. The attackers are strategies that use only past information: static concentration, idling, doubling down, momentum, random sizing and ramping within a period. Real foresight is the positive control. Results are in [SCORING.md](SCORING.md).
+
+The rule Zenith uses held up best:
+
+**excess = Σ (in-range liquidity − liquidity at period start) × (control's result per unit of liquidity − its long-run average)**
+
+- Static concentration and idling score exactly zero.
+- No history-only strategy scored above |t| = 1.2.
+- 60% foresight scored t = 4.7.
+
+**Limits:** a curator who never changes its liquidity earns nothing, by design. Real skill takes many periods to show, so fees and bonds settle over long windows.
 
 ## Corrections
 
