@@ -1,0 +1,362 @@
+{
+ "per capital (d x control) | static 1x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "per capital (d x control) | static 5x": [
+  -1.0030140639650569,
+  -2.2381035968718046,
+  326
+ ],
+ "per capital (d x control) | static 30x": [
+  -7.271851963746661,
+  -2.238103596871804,
+  326
+ ],
+ "per capital (d x control) | idle": [
+  0.2507535159912642,
+  2.2381035968718046,
+  326
+ ],
+ "per capital (d x control) | double down after a bad day": [
+  -0.08478726858361832,
+  -1.1186608518912242,
+  326
+ ],
+ "per capital (d x control) | momentum": [
+  0.06766726581816516,
+  0.7589447681811794,
+  326
+ ],
+ "per capital (d x control) | random size": [
+  0.00052082102644355,
+  0.008290539443346739,
+  326
+ ],
+ "per capital (d x control) | ramp up within period": [
+  -0.08095535055014794,
+  -1.311877201410994,
+  326
+ ],
+ "per capital (d x control) | ramp down within period": [
+  -0.04442140744548419,
+  -0.758641025072617,
+  326
+ ],
+ "per capital (d x control) | volatility timing (plausible skill)": [
+  -0.33334132470823213,
+  -3.589486400232781,
+  326
+ ],
+ "per capital (d x control) | perfect foresight": [
+  2.025352502836947,
+  15.604729303698987,
+  326
+ ],
+ "per capital (d x control) | 60% foresight": [
+  0.38263871547130757,
+  3.8006940606407986,
+  326
+ ],
+ "baseline = liquidity at period start | static 1x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = liquidity at period start | static 5x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = liquidity at period start | static 30x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = liquidity at period start | idle": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = liquidity at period start | double down after a bad day": [
+  0.016721041856821814,
+  0.1658042794301371,
+  326
+ ],
+ "baseline = liquidity at period start | momentum": [
+  0.08914298383518762,
+  1.1505052296146516,
+  326
+ ],
+ "baseline = liquidity at period start | random size": [
+  0.0007530837297382999,
+  0.008868918233354289,
+  326
+ ],
+ "baseline = liquidity at period start | ramp up within period": [
+  -0.20633210854578002,
+  -2.0170680109892,
+  326
+ ],
+ "baseline = liquidity at period start | ramp down within period": [
+  0.20633210854578002,
+  2.0170680109892,
+  326
+ ],
+ "baseline = liquidity at period start | volatility timing (plausible skill)": [
+  -0.029721668824830867,
+  -0.4889880441106097,
+  326
+ ],
+ "baseline = liquidity at period start | perfect foresight": [
+  1.87377922524176,
+  11.299278767326944,
+  326
+ ],
+ "baseline = liquidity at period start | 60% foresight": [
+  0.30232303037781144,
+  2.188121659972771,
+  326
+ ],
+ "baseline = period average (ex post) | static 1x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = period average (ex post) | static 5x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = period average (ex post) | static 30x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = period average (ex post) | idle": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = period average (ex post) | double down after a bad day": [
+  0.12138857844325551,
+  1.7582179192294864,
+  326
+ ],
+ "baseline = period average (ex post) | momentum": [
+  -0.20915240391842504,
+  -3.9965397922055645,
+  326
+ ],
+ "baseline = period average (ex post) | random size": [
+  0.0806127785381076,
+  1.4016317396964755,
+  326
+ ],
+ "baseline = period average (ex post) | ramp up within period": [
+  -0.01826697155233187,
+  -0.3431497366211887,
+  326
+ ],
+ "baseline = period average (ex post) | ramp down within period": [
+  0.01826697155233187,
+  0.3431497366211887,
+  326
+ ],
+ "baseline = period average (ex post) | volatility timing (plausible skill)": [
+  -0.18193825698170554,
+  -3.262374343568677,
+  326
+ ],
+ "baseline = period average (ex post) | perfect foresight": [
+  1.8043774417153609,
+  13.927317672484104,
+  326
+ ],
+ "baseline = period average (ex post) | 60% foresight": [
+  0.5146829189083634,
+  5.04813153381894,
+  326
+ ],
+ "baseline = previous period average | static 1x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = previous period average | static 5x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = previous period average | static 30x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = previous period average | idle": [
+  0.0,
+  0.0,
+  326
+ ],
+ "baseline = previous period average | double down after a bad day": [
+  -0.09087533227482401,
+  -1.052706290591594,
+  326
+ ],
+ "baseline = previous period average | momentum": [
+  0.21153866962752294,
+  1.956582182082402,
+  326
+ ],
+ "baseline = previous period average | random size": [
+  -0.12688479508131226,
+  -1.941396038884777,
+  326
+ ],
+ "baseline = previous period average | ramp up within period": [
+  -0.01826697155233187,
+  -0.3431497366211887,
+  326
+ ],
+ "baseline = previous period average | ramp down within period": [
+  0.01826697155233187,
+  0.3431497366211887,
+  326
+ ],
+ "baseline = previous period average | volatility timing (plausible skill)": [
+  -0.17013764613488985,
+  -1.7393334970415795,
+  326
+ ],
+ "baseline = previous period average | perfect foresight": [
+  2.097768835879649,
+  13.771079675617178,
+  326
+ ],
+ "baseline = previous period average | 60% foresight": [
+  0.3948247199124547,
+  4.017923890725311,
+  326
+ ],
+ "previous average, demeaned by long-run phi | static 1x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "previous average, demeaned by long-run phi | static 5x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "previous average, demeaned by long-run phi | static 30x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "previous average, demeaned by long-run phi | idle": [
+  0.0,
+  0.0,
+  326
+ ],
+ "previous average, demeaned by long-run phi | double down after a bad day": [
+  -0.09594759219123351,
+  -1.1096065739142662,
+  326
+ ],
+ "previous average, demeaned by long-run phi | momentum": [
+  0.21935104292669208,
+  2.0520961656503793,
+  326
+ ],
+ "previous average, demeaned by long-run phi | random size": [
+  -0.04362125019135368,
+  -0.7456797423392437,
+  326
+ ],
+ "previous average, demeaned by long-run phi | ramp up within period": [
+  -0.018266971552331868,
+  -0.3431497366211887,
+  326
+ ],
+ "previous average, demeaned by long-run phi | ramp down within period": [
+  0.018266971552331868,
+  0.3431497366211887,
+  326
+ ],
+ "previous average, demeaned by long-run phi | volatility timing (plausible skill)": [
+  -0.16856560515093236,
+  -1.6834147137417348,
+  326
+ ],
+ "previous average, demeaned by long-run phi | perfect foresight": [
+  2.1047340855070087,
+  13.96028803009199,
+  326
+ ],
+ "previous average, demeaned by long-run phi | 60% foresight": [
+  0.2885146856879928,
+  2.8099530715825165,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | static 1x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | static 5x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | static 30x": [
+  0.0,
+  0.0,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | idle": [
+  0.0,
+  0.0,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | double down after a bad day": [
+  -0.016048950399989884,
+  -0.15910011525339646,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | momentum": [
+  0.09200360991108834,
+  1.2064339059967102,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | random size": [
+  0.08433427105878116,
+  0.9119946829448198,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | ramp up within period": [
+  -0.042461034156092786,
+  -0.4160867311802834,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | ramp down within period": [
+  0.042461034156092786,
+  0.4160867311802834,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | volatility timing (plausible skill)": [
+  -0.031296510389902436,
+  -0.5065554961537587,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | perfect foresight": [
+  1.881232554073254,
+  11.509022504834933,
+  326
+ ],
+ "liquidity at period start, demeaned by long-run phi | 60% foresight": [
+  0.7449002637163741,
+  4.672852409301464,
+  326
+ ]
+}
