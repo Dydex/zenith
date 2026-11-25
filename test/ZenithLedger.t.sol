@@ -29,11 +29,11 @@ contract ZenithLedgerTest is ZenithTestBase {
         initPool(currency0, currency1, IHooks(address(hook)), 500, SQRT_PRICE_1_1);
     }
 
-    function test_revertsWhenNotDeployerInitialises() public {
+    function test_revertsWhenNotInitializerInitialises() public {
         ZenithHook fresh = _deployFreshHook();
         PoolKey memory k = PoolKey(currency0, currency1, 3000, 60, IHooks(address(fresh)));
         vm.prank(makeAddr("stranger"));
-        _expectHookRevert(address(fresh), ZenithHook.NotDeployer.selector);
+        _expectHookRevert(address(fresh), ZenithHook.NotInitializer.selector);
         manager.initialize(k, SQRT_PRICE_1_1);
     }
 
@@ -147,7 +147,7 @@ contract ZenithLedgerTest is ZenithTestBase {
 
     function _deployFreshHook() internal returns (ZenithHook fresh) {
         address target = address(uint160(Hooks.BEFORE_INITIALIZE_FLAG) | (uint160(0x5555) << 144));
-        deployCodeTo("ZenithHook.sol:ZenithHook", abi.encode(manager), target);
+        deployCodeTo("ZenithHook.sol:ZenithHook", abi.encode(manager, address(this)), target);
         fresh = ZenithHook(target);
     }
 }

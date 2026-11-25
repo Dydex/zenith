@@ -26,7 +26,7 @@ abstract contract ZenithTestBase is Test, Deployers {
         deployFreshManagerAndRouters();
         (currency0, currency1) = deployMintAndApprove2Currencies();
 
-        deployCodeTo("ZenithHook.sol:ZenithHook", abi.encode(manager), HOOK_ADDRESS);
+        deployCodeTo("ZenithHook.sol:ZenithHook", abi.encode(manager, address(this)), HOOK_ADDRESS);
         hook = ZenithHook(HOOK_ADDRESS);
 
         MockERC20(Currency.unwrap(currency0)).approve(address(hook), type(uint256).max);

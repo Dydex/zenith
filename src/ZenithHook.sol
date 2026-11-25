@@ -61,8 +61,9 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         DeployControl
     }
 
-    /// @notice The only address allowed to initialise the pool this hook serves.
-    address public immutable deployer;
+    /// @notice The only address allowed to initialise the pool this hook serves. It is passed in explicitly:
+    /// hooks are deployed through a CREATE2 factory to mine their address, so msg.sender would be the factory.
+    address public immutable initializer;
 
     PoolKey public poolKey;
     bool public poolBound;
@@ -76,7 +77,8 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     event ShapeSet(uint256 indexed sleeveId, uint256 rangeCount);
     event FeesCollected(uint256 indexed sleeveId, uint256 fees0, uint256 fees1);
 
-    error NotDeployer();
+    error NotInitializer();
+    error ZeroInitializer();
     error PoolAlreadyBound();
     error PoolNotBound();
     error NativeCurrencyUnsupported();
@@ -91,8 +93,9 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     error DuplicateRange(uint256 index);
     error InsufficientIdle();
 
-    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {
-        deployer = msg.sender;
+    constructor(IPoolManager _poolManager, address _initializer) BaseHook(_poolManager) {
+        if (_initializer == address(0)) revert ZeroInitializer();
+        initializer = _initializer;
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory permissions) {
@@ -103,10 +106,10 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     // Pool binding
     // ------------------------------------------------------------------
 
-    /// @dev Binds the hook to the first pool initialised by the deployer and opens the control sleeve.
+    /// @dev Binds the hook to the first pool initialised by the initializer and opens the control sleeve.
     /// Restricting initialisation stops anyone else from claiming the hook with a pool of hostile tokens.
     function _beforeInitialize(address sender, PoolKey calldata key, uint160) internal override returns (bytes4) {
-        if (sender != deployer) revert NotDeployer();
+        if (sender != initializer) revert NotInitializer();
         if (poolBound) revert PoolAlreadyBound();
         if (key.currency0.isAddressZero()) revert NativeCurrencyUnsupported();
 
