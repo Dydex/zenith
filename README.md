@@ -43,6 +43,7 @@ Zenith settles curator scores, fees and bonds in periods. Reactive Network close
 - [x] Scoring rule chosen by attacking six candidates with history-only strategies on mainnet data ([evidence](evidence/README.md#choosing-the-scoring-rule))
 - [ ] Skill scoring in the hook: liquidity changes since period start, times the control's per-liquidity result above its long-run average
 - [ ] Symmetric curator fee with a bond
+- [x] Deploy script (mined hook address, CREATE2) and an end-to-end demo script, run on a local node
 - [ ] Settlement price clamp and forced-close safety
 - [ ] Attack tests (wash trading, price pushes, idle curators)
 - [ ] Reactive Network settlement on Unichain Sepolia and Reactive Lasna
@@ -62,6 +63,16 @@ For the deep settings used as evidence (10,000 fuzz runs, and 256 invariant runs
 
 ```bash
 FOUNDRY_PROFILE=deep forge test
+```
+
+## Deploy and demo
+
+The deploy script mines a hook address that carries the permission flags, deploys the hook through the CREATE2 factory and initialises the pool. On Unichain Sepolia it uses Uniswap's official PoolManager; on a local node it deploys a fresh one. Addresses are written to `deployments/<chain id>.json`. The demo script then runs one full flow against that deployment: an ordinary LP, the funded control, a curator sleeve with a two-range shape, swaps in both directions and fee collection.
+
+```bash
+anvil &
+forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key <anvil key>
+forge script script/Demo.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key <anvil key>
 ```
 
 To check that the fee tests can actually catch accounting bugs, run the mutation check. It plants one deliberate bug at a time in the hook and expects the twin fee tests to fail on each:
