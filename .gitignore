@@ -19,3 +19,6 @@ out/
 
 # Python
 __pycache__/
+
+# Local node deployments are throwaway
+deployments/31337.json

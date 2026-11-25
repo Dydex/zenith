@@ -8,6 +8,7 @@ optimizer = true
 optimizer_runs = 800
 bytecode_hash = "none"
 ffi = false
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
 
 [fuzz]
 runs = 1000
