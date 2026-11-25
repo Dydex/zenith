@@ -16,6 +16,11 @@ contract ZenithTwinFeesTest is ZenithTestBase {
     uint256 internal sleeveA;
     uint256 internal sleeveB;
 
+    /// @dev Fees collected by each sleeve's twins since the start. Checkpointing any sleeve also collects the
+    /// control's fees, so sleeves are compared with their twins cumulatively, not per call.
+    mapping(uint256 sleeveId => uint256) internal twinTotal0;
+    mapping(uint256 sleeveId => uint256) internal twinTotal1;
+
     function setUp() public override {
         super.setUp();
         _addExternalLiquidity(-6000, 6000, 1000e18);
@@ -151,6 +156,8 @@ contract ZenithTwinFeesTest is ZenithTestBase {
             fees0 += uint256(int256(delta.amount0()));
             fees1 += uint256(int256(delta.amount1()));
         }
+        twinTotal0[sleeveId] += fees0;
+        twinTotal1[sleeveId] += fees1;
     }
 
     function _modifyTwin(uint256 sleeveId, ZenithHook.Range memory range, int256 liquidityDelta)
@@ -169,20 +176,21 @@ contract ZenithTwinFeesTest is ZenithTestBase {
         );
     }
 
-    /// @dev Pokes the twins and the sleeve, then requires identical fees and that the sleeve's fees landed in idle.
+    /// @dev Pokes the twins and the sleeve, then requires identical cumulative fees, and that what this poke
+    /// collected landed in idle. Returns the sleeve's cumulative fees.
     function _assertSleeveMatchesTwins(uint256 sleeveId) internal returns (uint256 fees0, uint256 fees1) {
-        (uint256 twin0, uint256 twin1) = _pokeTwins(sleeveId);
+        _pokeTwins(sleeveId);
 
         ZenithHook.Sleeve memory before = hook.getSleeve(sleeveId);
         hook.poke(sleeveId);
         ZenithHook.Sleeve memory afterPoke = hook.getSleeve(sleeveId);
 
-        fees0 = afterPoke.fees0 - before.fees0;
-        fees1 = afterPoke.fees1 - before.fees1;
-        assertEq(fees0, twin0, "sleeve fees == twin fees (token0)");
-        assertEq(fees1, twin1, "sleeve fees == twin fees (token1)");
-        assertEq(afterPoke.idle0 - before.idle0, fees0, "fees credited to idle (token0)");
-        assertEq(afterPoke.idle1 - before.idle1, fees1, "fees credited to idle (token1)");
+        fees0 = afterPoke.fees0;
+        fees1 = afterPoke.fees1;
+        assertEq(fees0, twinTotal0[sleeveId], "sleeve fees == twin fees (token0)");
+        assertEq(fees1, twinTotal1[sleeveId], "sleeve fees == twin fees (token1)");
+        assertEq(afterPoke.idle0 - before.idle0, afterPoke.fees0 - before.fees0, "fees credited to idle (token0)");
+        assertEq(afterPoke.idle1 - before.idle1, afterPoke.fees1 - before.fees1, "fees credited to idle (token1)");
     }
 
     function _randomSwaps(uint256 seed, uint256 maxSwaps) internal {
