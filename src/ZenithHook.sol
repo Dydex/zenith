@@ -6,7 +6,9 @@ import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -38,6 +40,12 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     /// @notice Maximum number of price ranges in one sleeve's shape.
     uint256 public constant MAX_RANGES = 4;
 
+    /// @notice Length of a scoring period. A curator's excess is measured against its liquidity at period start.
+    uint256 public constant PERIOD = 7 days;
+
+    /// @dev Fixed-point scale of the control index (skill per unit of liquidity).
+    int256 internal constant INDEX_SCALE = 1e18;
+
     struct Sleeve {
         address curator; // address(0) for the control sleeve
         uint128 idle0; // token0 held for this sleeve as ERC-6909 claims
@@ -54,11 +62,28 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         uint128 liquidity;
     }
 
+    /// @notice Scoring state of one sleeve. All values are in token1.
+    /// @dev excess = actual skill - (in-range liquidity at period start x the control's skill per unit of
+    /// liquidity) - (liquidity added since period start x the control's long-run average per second). A curator
+    /// who never changes its liquidity scores zero, however concentrated, and so does an idle one.
+    struct Score {
+        uint128 held0; // token0 held at the last checkpoint (idle, collected fees and positions)
+        uint128 held1; // token1 held at the last checkpoint
+        uint128 inRange; // in-range liquidity right after the last checkpoint
+        uint128 startInRange; // in-range liquidity at the start of the current period
+        int256 indexLast; // control index at the last checkpoint
+        int256 excess; // excess skill in the current period
+        int256 lastExcess; // excess skill of the last closed period
+        uint64 lastCheckpoint;
+        uint64 periodStart; // zero until the sleeve's first shape
+    }
+
     enum Action {
         Fund,
         SetShape,
         Poke,
-        DeployControl
+        DeployControl,
+        RollPeriod
     }
 
     /// @notice The only address allowed to initialise the pool this hook serves. It is passed in explicitly:
@@ -70,12 +95,22 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     uint256 public sleeveCount;
     mapping(uint256 sleeveId => Sleeve) internal _sleeves;
     mapping(uint256 sleeveId => Range[]) internal _ranges;
+    mapping(uint256 sleeveId => Score) internal _scores;
+
+    /// @notice Cumulative skill of the control per unit of liquidity, scaled by 1e18. Every curator is compared
+    /// with this index.
+    int256 public controlIndex;
+
+    /// @notice When the control first had liquidity in range; the index's long-run average is taken from here.
+    uint64 public controlIndexStart;
 
     event PoolBound(PoolId indexed poolId);
     event SleeveOpened(uint256 indexed sleeveId, address indexed curator);
     event SleeveFunded(uint256 indexed sleeveId, address indexed funder, uint256 amount0, uint256 amount1);
     event ShapeSet(uint256 indexed sleeveId, uint256 rangeCount);
     event FeesCollected(uint256 indexed sleeveId, uint256 fees0, uint256 fees1);
+    event Checkpointed(uint256 indexed sleeveId, int256 skill, int256 excess);
+    event PeriodClosed(uint256 indexed sleeveId, int256 excess);
 
     error NotInitializer();
     error ZeroInitializer();
@@ -92,6 +127,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     error InvalidRange(uint256 index);
     error DuplicateRange(uint256 index);
     error InsufficientIdle();
+    error PeriodNotOver();
 
     constructor(IPoolManager _poolManager, address _initializer) BaseHook(_poolManager) {
         if (_initializer == address(0)) revert ZeroInitializer();
@@ -161,7 +197,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         poolManager.unlock(abi.encode(Action.SetShape, abi.encode(sleeveId, ranges)));
     }
 
-    /// @notice Collects fees accrued by a sleeve's positions into its idle balance. Anyone can call it.
+    /// @notice Collects a sleeve's fees into its idle balance and checkpoints its score. Anyone can call it.
     function poke(uint256 sleeveId) external {
         if (!_sleeves[sleeveId].exists) revert UnknownSleeve();
         poolManager.unlock(abi.encode(Action.Poke, abi.encode(sleeveId)));
@@ -172,6 +208,19 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     function deployControl() external {
         if (!poolBound) revert PoolNotBound();
         poolManager.unlock(abi.encode(Action.DeployControl, ""));
+    }
+
+    /// @notice Closes a sleeve's scoring period once it has lasted PERIOD, records its excess and starts the next
+    /// period from the sleeve's current liquidity. Anyone can call it.
+    function rollPeriod(uint256 sleeveId) external {
+        Score storage score = _scores[sleeveId];
+        if (score.periodStart == 0 || block.timestamp < score.periodStart + PERIOD) revert PeriodNotOver();
+        poolManager.unlock(abi.encode(Action.RollPeriod, abi.encode(sleeveId)));
+    }
+
+    function getScore(uint256 sleeveId) external view returns (Score memory) {
+        if (!_sleeves[sleeveId].exists) revert UnknownSleeve();
+        return _scores[sleeveId];
     }
 
     function getSleeve(uint256 sleeveId) external view returns (Sleeve memory) {
@@ -205,15 +254,29 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         if (action == Action.Fund) {
             (address funder, uint256 sleeveId, uint128 amount0, uint128 amount1) =
                 abi.decode(payload, (address, uint256, uint128, uint128));
+            _checkpoint(sleeveId);
             _fund(funder, sleeveId, amount0, amount1);
         } else if (action == Action.SetShape) {
             (uint256 sleeveId, Range[] memory ranges) = abi.decode(payload, (uint256, Range[]));
+            _checkpoint(sleeveId);
             _applyShape(sleeveId, ranges);
+            _afterShape(sleeveId);
             emit ShapeSet(sleeveId, ranges.length);
         } else if (action == Action.Poke) {
-            _poke(abi.decode(payload, (uint256)));
+            _checkpoint(abi.decode(payload, (uint256)));
         } else if (action == Action.DeployControl) {
+            _checkpoint(CONTROL_SLEEVE);
             _deployControl();
+            _afterShape(CONTROL_SLEEVE);
+        } else if (action == Action.RollPeriod) {
+            uint256 sleeveId = abi.decode(payload, (uint256));
+            _checkpoint(sleeveId);
+            Score storage score = _scores[sleeveId];
+            score.lastExcess = score.excess;
+            score.excess = 0;
+            score.startInRange = score.inRange;
+            score.periodStart = uint64(block.timestamp);
+            emit PeriodClosed(sleeveId, score.lastExcess);
         } else {
             revert UnknownAction();
         }
@@ -236,6 +299,10 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         Sleeve storage sleeve = _sleeves[sleeveId];
         sleeve.idle0 += amount0;
         sleeve.idle1 += amount1;
+        // New money is added after the checkpoint, so it never counts as skill.
+        Score storage score = _scores[sleeveId];
+        score.held0 += amount0;
+        score.held1 += amount1;
         emit SleeveFunded(sleeveId, funder, amount0, amount1);
     }
 
@@ -369,6 +436,98 @@ contract ZenithHook is BaseHook, IUnlockCallback {
             return (uint256(idle) - owed).toUint128();
         }
         return idle;
+    }
+
+    // ------------------------------------------------------------------
+    // Internal: scoring
+    // ------------------------------------------------------------------
+
+    /// @dev Brings the control index up to date, then the sleeve's score. Runs before anything that changes what a
+    /// sleeve holds or how its liquidity is placed.
+    function _checkpoint(uint256 sleeveId) internal {
+        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(poolKey.toId());
+        _accrue(CONTROL_SLEEVE, sqrtPriceX96, tick);
+        if (sleeveId != CONTROL_SLEEVE) _accrue(sleeveId, sqrtPriceX96, tick);
+    }
+
+    function _accrue(uint256 sleeveId, uint160 sqrtPriceX96, int24 tick) internal {
+        _poke(sleeveId);
+        Score storage score = _scores[sleeveId];
+        (uint256 held0, uint256 held1) = _holdings(sleeveId, sqrtPriceX96);
+
+        if (score.lastCheckpoint != 0) {
+            // Skill: what the sleeve holds now, minus what its previous holdings are worth at today's price.
+            int256 skill = _value(held0, held1, sqrtPriceX96).toInt256()
+                - _value(score.held0, score.held1, sqrtPriceX96).toInt256();
+            if (sleeveId == CONTROL_SLEEVE) {
+                if (score.inRange > 0) controlIndex += skill * INDEX_SCALE / uint256(score.inRange).toInt256();
+            } else if (score.periodStart != 0) {
+                int256 start = uint256(score.startInRange).toInt256();
+                int256 expected = start * (controlIndex - score.indexLast) / INDEX_SCALE;
+                int256 drift = _drift(uint256(score.inRange).toInt256() - start, block.timestamp - score.lastCheckpoint);
+                score.excess += skill - expected - drift;
+                emit Checkpointed(sleeveId, skill, score.excess);
+            }
+        }
+
+        score.held0 = held0.toUint128();
+        score.held1 = held1.toUint128();
+        score.indexLast = controlIndex;
+        score.lastCheckpoint = uint64(block.timestamp);
+        score.inRange = _inRangeLiquidity(sleeveId, tick);
+    }
+
+    /// @dev Liquidity added since period start earns the control's long-run average outcome per second for free,
+    /// so that much is not counted as skill.
+    function _drift(int256 addedLiquidity, uint256 elapsed) internal view returns (int256) {
+        if (addedLiquidity == 0 || elapsed == 0 || controlIndexStart == 0) return 0;
+        uint256 history = block.timestamp - controlIndexStart;
+        if (history == 0) return 0;
+        return controlIndex * addedLiquidity / INDEX_SCALE * elapsed.toInt256() / history.toInt256();
+    }
+
+    /// @dev After a shape changes, records the new in-range liquidity. A curator's first shape starts its period.
+    function _afterShape(uint256 sleeveId) internal {
+        (, int24 tick,,) = poolManager.getSlot0(poolKey.toId());
+        Score storage score = _scores[sleeveId];
+        score.inRange = _inRangeLiquidity(sleeveId, tick);
+        if (sleeveId == CONTROL_SLEEVE) {
+            if (controlIndexStart == 0 && score.inRange > 0) controlIndexStart = uint64(block.timestamp);
+        } else if (score.periodStart == 0) {
+            score.periodStart = uint64(block.timestamp);
+            score.startInRange = score.inRange;
+        }
+    }
+
+    /// @dev Idle balance plus the tokens in every position at the given price.
+    function _holdings(uint256 sleeveId, uint160 sqrtPriceX96)
+        internal
+        view
+        returns (uint256 amount0, uint256 amount1)
+    {
+        Sleeve storage sleeve = _sleeves[sleeveId];
+        amount0 = sleeve.idle0;
+        amount1 = sleeve.idle1;
+        Range[] storage ranges = _ranges[sleeveId];
+        for (uint256 i; i < ranges.length; ++i) {
+            uint160 lower = TickMath.getSqrtPriceAtTick(ranges[i].tickLower);
+            uint160 upper = TickMath.getSqrtPriceAtTick(ranges[i].tickUpper);
+            uint160 inside = sqrtPriceX96 < lower ? lower : (sqrtPriceX96 > upper ? upper : sqrtPriceX96);
+            amount0 += SqrtPriceMath.getAmount0Delta(inside, upper, ranges[i].liquidity, false);
+            amount1 += SqrtPriceMath.getAmount1Delta(lower, inside, ranges[i].liquidity, false);
+        }
+    }
+
+    function _inRangeLiquidity(uint256 sleeveId, int24 tick) internal view returns (uint128 liquidity) {
+        Range[] storage ranges = _ranges[sleeveId];
+        for (uint256 i; i < ranges.length; ++i) {
+            if (ranges[i].tickLower <= tick && tick < ranges[i].tickUpper) liquidity += ranges[i].liquidity;
+        }
+    }
+
+    /// @dev Value in token1 at the given price.
+    function _value(uint256 amount0, uint256 amount1, uint160 sqrtPriceX96) internal pure returns (uint256) {
+        return FullMath.mulDiv(FullMath.mulDiv(amount0, sqrtPriceX96, 1 << 96), sqrtPriceX96, 1 << 96) + amount1;
     }
 
     function _validateShape(Range[] calldata ranges) internal view {
