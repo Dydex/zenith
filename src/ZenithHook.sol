@@ -8,7 +8,6 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -16,7 +15,13 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
+
+import {ZenithMath} from "./ZenithMath.sol";
+
+/// @notice What the hook needs from its settler: whether a sleeve's curator has posted enough bond to manage it.
+interface IZenithBond {
+    function isBonded(uint256 sleeveId) external view returns (bool);
+}
 
 /// @title ZenithHook
 /// @notice Curated liquidity for one Uniswap v4 pool. Capital is split into sleeves: sleeve 0 is a passive
@@ -84,7 +89,8 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         Poke,
         DeployControl,
         RollPeriod,
-        Withdraw
+        Withdraw,
+        Settle
     }
 
     /// @notice The only address allowed to initialise the pool this hook serves. It is passed in explicitly:
@@ -109,6 +115,10 @@ contract ZenithHook is BaseHook, IUnlockCallback {
 
     /// @notice When the control first had liquidity in range; the index's long-run average is taken from here.
     uint64 public controlIndexStart;
+
+    /// @notice Holds curator bonds and settles each period. Once set, curators need a bond to shape, and only the
+    /// settler closes periods, so no period's result can be skipped.
+    address public settler;
 
     event PoolBound(PoolId indexed poolId);
     event SleeveOpened(uint256 indexed sleeveId, address indexed curator);
@@ -141,6 +151,10 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     error PeriodNotOver();
     error ZeroDeposit();
     error InsufficientShares();
+    error NotSettler();
+    error SettlerAlreadySet();
+    error NotBonded();
+    error UnbackedCredit();
 
     constructor(IPoolManager _poolManager, address _initializer) BaseHook(_poolManager) {
         if (_initializer == address(0)) revert ZeroInitializer();
@@ -225,6 +239,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         Sleeve storage sleeve = _sleeves[sleeveId];
         if (!sleeve.exists) revert UnknownSleeve();
         if (msg.sender != sleeve.curator) revert NotCurator();
+        if (settler != address(0) && !IZenithBond(settler).isBonded(sleeveId)) revert NotBonded();
         _validateShape(ranges);
         poolManager.unlock(abi.encode(Action.SetShape, abi.encode(sleeveId, ranges)));
     }
@@ -245,13 +260,30 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     /// @notice Closes a sleeve's scoring period once it has lasted PERIOD, records its excess and starts the next
     /// period from the sleeve's current liquidity. Anyone can call it.
     function rollPeriod(uint256 sleeveId) external {
+        if (settler != address(0) && msg.sender != settler) revert NotSettler();
         Score storage score = _scores[sleeveId];
         if (score.periodStart == 0 || block.timestamp < score.periodStart + PERIOD) revert PeriodNotOver();
         poolManager.unlock(abi.encode(Action.RollPeriod, abi.encode(sleeveId)));
     }
 
+    /// @notice Sets the settler, once, by the initializer.
+    function setSettler(address _settler) external {
+        if (msg.sender != initializer) revert NotInitializer();
+        if (settler != address(0)) revert SettlerAlreadySet();
+        settler = _settler;
+    }
+
+    /// @notice The settler's only lever, applied at a checkpoint so none of it counts as skill. A positive amount
+    /// credits token1 claims the settler has already transferred to the hook (a slashed bond) to the sleeve's
+    /// depositors. A negative amount pays up to that much token1 from the sleeve to `to` (the curator's fee). Close
+    /// removes all of the sleeve's liquidity.
+    function settle(uint256 sleeveId, int256 amount1, address to, bool close) external returns (uint256 paid) {
+        if (msg.sender != settler) revert NotSettler();
+        bytes memory result = poolManager.unlock(abi.encode(Action.Settle, abi.encode(sleeveId, amount1, to, close)));
+        paid = abi.decode(result, (uint256));
+    }
+
     function getScore(uint256 sleeveId) external view returns (Score memory) {
-        if (!_sleeves[sleeveId].exists) revert UnknownSleeve();
         return _scores[sleeveId];
     }
 
@@ -293,6 +325,15 @@ contract ZenithHook is BaseHook, IUnlockCallback {
                 abi.decode(payload, (address, uint256, uint256, address));
             _checkpoint(sleeveId);
             return _withdraw(owner, sleeveId, shares, to);
+        } else if (action == Action.Settle) {
+            (uint256 sleeveId, int256 amount1, address to, bool close) =
+                abi.decode(payload, (uint256, int256, address, bool));
+            _checkpoint(sleeveId);
+            if (close) {
+                _applyShape(sleeveId, new Range[](0));
+                _afterShape(sleeveId);
+            }
+            return abi.encode(_transfer1(sleeveId, amount1, to));
         } else if (action == Action.SetShape) {
             (uint256 sleeveId, Range[] memory ranges) = abi.decode(payload, (uint256, Range[]));
             _checkpoint(sleeveId);
@@ -339,7 +380,10 @@ contract ZenithHook is BaseHook, IUnlockCallback {
             (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
             (shares, amount0, amount1) = (_value(amount0Max, amount1Max, sqrtPriceX96), amount0Max, amount1Max);
         } else {
-            (shares, amount0, amount1) = _proportional(supply, score.held0, score.held1, amount0Max, amount1Max);
+            uint256 used0;
+            uint256 used1;
+            (shares, used0, used1) = ZenithMath.proportional(supply, score.held0, score.held1, amount0Max, amount1Max);
+            (amount0, amount1) = (used0.toUint128(), used1.toUint128());
         }
         if (shares == 0) revert ZeroDeposit();
 
@@ -360,26 +404,6 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         sharesOf[sleeveId][funder] += shares;
         emit SleeveFunded(sleeveId, funder, amount0, amount1, shares);
         return abi.encode(shares, amount0, amount1);
-    }
-
-    /// @dev Shares for an in-kind deposit at the sleeve's current ratio; amounts round up so existing holders never
-    /// lose to rounding.
-    function _proportional(uint256 supply, uint256 held0, uint256 held1, uint128 max0, uint128 max1)
-        internal
-        pure
-        returns (uint256 shares, uint128 amount0, uint128 amount1)
-    {
-        shares = type(uint256).max;
-        if (held0 > 0) shares = FullMath.mulDiv(max0, supply, held0);
-        if (held1 > 0) shares = _min(shares, FullMath.mulDiv(max1, supply, held1));
-        if (shares == type(uint256).max) return (0, 0, 0);
-        while (shares > 0) {
-            uint256 need0 = FullMath.mulDivRoundingUp(shares, held0, supply);
-            uint256 need1 = FullMath.mulDivRoundingUp(shares, held1, supply);
-            if (need0 <= max0 && need1 <= max1) return (shares, uint128(need0), uint128(need1));
-            --shares;
-        }
-        return (0, 0, 0);
     }
 
     /// @dev Removes the owner's fraction of every position, adds the same fraction of idle tokens and sends both.
@@ -456,6 +480,26 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         amount1 = idle1 + net1.toUint256();
         key.currency0.take(poolManager, to, amount0, false);
         key.currency1.take(poolManager, to, amount1, false);
+    }
+
+    /// @dev Moves token1 into or out of a sleeve at a checkpoint, adjusting what the score holds so it is not skill.
+    function _transfer1(uint256 sleeveId, int256 amount1, address to) internal returns (uint256 moved) {
+        Sleeve storage sleeve = _sleeves[sleeveId];
+        Score storage score = _scores[sleeveId];
+        Currency currency1 = poolKey.currency1;
+        if (amount1 > 0) {
+            moved = amount1.toUint256();
+            (, uint256 total1) = totalIdle();
+            if (poolManager.balanceOf(address(this), currency1.toId()) < total1 + moved) revert UnbackedCredit();
+            sleeve.idle1 += moved.toUint128();
+            score.held1 += moved.toUint128();
+        } else if (amount1 < 0) {
+            moved = _min((-amount1).toUint256(), sleeve.idle1);
+            sleeve.idle1 -= moved.toUint128();
+            score.held1 -= moved.toUint128();
+            currency1.settle(poolManager, address(this), moved, true);
+            currency1.take(poolManager, to, moved, false);
+        }
     }
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {
@@ -544,18 +588,9 @@ contract ZenithHook is BaseHook, IUnlockCallback {
 
         PoolKey memory key = poolKey;
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
-        int24 lower = TickMath.minUsableTick(key.tickSpacing);
-        int24 upper = TickMath.maxUsableTick(key.tickSpacing);
-
         Sleeve storage control = _sleeves[CONTROL_SLEEVE];
-        // Leave one wei of margin: adding liquidity rounds the required amounts up.
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            sqrtPriceX96,
-            TickMath.getSqrtPriceAtTick(lower),
-            TickMath.getSqrtPriceAtTick(upper),
-            control.idle0 > 0 ? control.idle0 - 1 : 0,
-            control.idle1 > 0 ? control.idle1 - 1 : 0
-        );
+        (int24 lower, int24 upper, uint128 liquidity) =
+            ZenithMath.fullRange(key.tickSpacing, sqrtPriceX96, control.idle0, control.idle1);
         if (liquidity == 0) return;
 
         Range[] memory shape = new Range[](1);
@@ -666,11 +701,10 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         amount1 = sleeve.idle1;
         Range[] storage ranges = _ranges[sleeveId];
         for (uint256 i; i < ranges.length; ++i) {
-            uint160 lower = TickMath.getSqrtPriceAtTick(ranges[i].tickLower);
-            uint160 upper = TickMath.getSqrtPriceAtTick(ranges[i].tickUpper);
-            uint160 inside = sqrtPriceX96 < lower ? lower : (sqrtPriceX96 > upper ? upper : sqrtPriceX96);
-            amount0 += SqrtPriceMath.getAmount0Delta(inside, upper, ranges[i].liquidity, false);
-            amount1 += SqrtPriceMath.getAmount1Delta(lower, inside, ranges[i].liquidity, false);
+            (uint256 in0, uint256 in1) =
+                ZenithMath.amounts(ranges[i].tickLower, ranges[i].tickUpper, ranges[i].liquidity, sqrtPriceX96);
+            amount0 += in0;
+            amount1 += in1;
         }
     }
 
@@ -683,7 +717,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
 
     /// @dev Value in token1 at the given price.
     function _value(uint256 amount0, uint256 amount1, uint160 sqrtPriceX96) internal pure returns (uint256) {
-        return FullMath.mulDiv(FullMath.mulDiv(amount0, sqrtPriceX96, 1 << 96), sqrtPriceX96, 1 << 96) + amount1;
+        return ZenithMath.value(amount0, amount1, sqrtPriceX96);
     }
 
     function _validateShape(Range[] calldata ranges) internal view {
