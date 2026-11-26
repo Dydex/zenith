@@ -50,6 +50,14 @@ contract ZenithInvariantTest is ZenithTestBase {
         }
     }
 
+    /// @notice Every share is owned: the handler is the only depositor, so its shares are the whole supply.
+    function invariant_sharesSumToSupply() public view {
+        uint256 count = hook.sleeveCount();
+        for (uint256 id; id < count; ++id) {
+            assertEq(hook.sharesOf(id, address(handler)), hook.totalShares(id), "shares == supply");
+        }
+    }
+
     /// @notice A sleeve's cumulative collected fees never go down.
     function invariant_feesNeverDecrease() public view {
         assertFalse(handler.feesDecreased(), "a sleeve's fee counter decreased");
@@ -58,6 +66,7 @@ contract ZenithInvariantTest is ZenithTestBase {
     /// @dev Printed once per run, so it is visible that every action was actually exercised.
     function afterInvariant() public view {
         console2.log("fund", handler.calls("fund"));
+        console2.log("withdraw", handler.calls("withdraw"));
         console2.log("setShape", handler.calls("setShape"));
         console2.log("setShape reverted (unaffordable)", handler.calls("setShape-reverted"));
         console2.log("clearShape", handler.calls("clearShape"));

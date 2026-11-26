@@ -65,8 +65,21 @@ contract ZenithHandler is Test {
         amount1 = uint128(bound(amount1, 0, 50e18));
         token0.mint(address(this), amount0);
         token1.mint(address(this), amount1);
-        hook.fund(sleeveId, amount0, amount1);
-        calls["fund"]++;
+        try hook.fund(sleeveId, amount0, amount1) {
+            calls["fund"]++;
+        } catch {
+            calls["fund-empty"]++; // one side missing at the sleeve's ratio buys no shares
+        }
+        _recordFees();
+    }
+
+    function withdraw(uint256 sleeveSeed, uint256 fraction) external {
+        uint256 sleeveId = _anySleeve(sleeveSeed);
+        uint256 owned = hook.sharesOf(sleeveId, address(this));
+        uint256 shares = owned * bound(fraction, 1, 100) / 100;
+        if (shares == 0) return;
+        hook.withdraw(sleeveId, shares, address(this));
+        calls["withdraw"]++;
         _recordFees();
     }
 
