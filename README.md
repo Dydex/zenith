@@ -22,6 +22,14 @@ We found 57 managed-vault contracts on three mainnet ETH/stablecoin pools (2021 
 
 Method, limits, corrections and an offline re-run are in [evidence/](evidence/README.md).
 
+## Contracts
+
+| Contract | Role |
+|---|---|
+| [`ZenithHook`](src/ZenithHook.sol) | Sleeves, curator shapes, depositor shares and skill scoring for one pool |
+| [`ZenithSettler`](src/ZenithSettler.sol) | Curator bonds and symmetric settlement of each period; the receiver for Reactive Network callbacks |
+| [`ZenithMath`](src/ZenithMath.sol) | Position valuation and deposit maths, linked as a library so the hook stays under the 24 KB size limit |
+
 ## Partner integration: Reactive Network (planned)
 
 Zenith settles curator scores, fees and bonds in periods. Reactive Network closes each period automatically, with no keeper bot:
@@ -43,9 +51,9 @@ Zenith settles curator scores, fees and bonds in periods. Reactive Network close
 - [x] Scoring rule chosen by attacking six candidates with history-only strategies on mainnet data ([evidence](evidence/README.md#choosing-the-scoring-rule))
 - [x] Depositor shares: in-kind deposits at the sleeve's ratio and pro-rata withdrawals of idle tokens and positions, neutral to the curator's score
 - [x] Skill scoring in the hook: liquidity changes since period start, times the control's per-liquidity result above its long-run average (static and idle curators score zero on a real PoolManager; timing scores; deposits never count)
-- [ ] Symmetric curator fee with a bond
+- [x] Symmetric curator fee with a bond: 20% of new highs in cumulative excess to the curator, 20% of new lows from its bond to depositors, a 5% minimum bond, and forced close when it falls short ([`ZenithSettler`](src/ZenithSettler.sol))
 - [x] Deploy script (mined hook address, CREATE2) and an end-to-end demo script, run on a local node
-- [ ] Settlement price clamp and forced-close safety
+- [ ] Settlement price clamp
 - [ ] Attack tests (wash trading, price pushes, idle curators)
 - [ ] Reactive Network settlement on Unichain Sepolia and Reactive Lasna
 - [ ] Twin-pool demo, gas report, frontend
