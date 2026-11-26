@@ -41,6 +41,7 @@ Zenith settles curator scores, fees and bonds in periods. Reactive Network close
 - [x] Mainnet evidence, reproducible offline
 - [x] Benchmark requirement pinned by test: a static narrow range must not count as skill
 - [x] Scoring rule chosen by attacking six candidates with history-only strategies on mainnet data ([evidence](evidence/README.md#choosing-the-scoring-rule))
+- [x] Depositor shares: in-kind deposits at the sleeve's ratio and pro-rata withdrawals of idle tokens and positions, neutral to the curator's score
 - [x] Skill scoring in the hook: liquidity changes since period start, times the control's per-liquidity result above its long-run average (static and idle curators score zero on a real PoolManager; timing scores; deposits never count)
 - [ ] Symmetric curator fee with a bond
 - [x] Deploy script (mined hook address, CREATE2) and an end-to-end demo script, run on a local node
