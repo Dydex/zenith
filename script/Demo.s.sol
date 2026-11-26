@@ -13,9 +13,10 @@ import {Script, console2} from "forge-std/Script.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {ZenithHook} from "../src/ZenithHook.sol";
+import {ZenithSettler} from "../src/ZenithSettler.sol";
 
 /// @notice Runs one end-to-end flow against a deployment from Deploy.s.sol: liquidity from an ordinary LP, a funded
-/// control, a curator sleeve with a two-range shape, swaps in both directions, and fee collection.
+/// control, a bonded curator sleeve with a two-range shape, swaps in both directions, and fee collection.
 ///
 /// forge script script/Demo.s.sol --rpc-url <rpc> --broadcast --private-key <key>
 ///
@@ -30,6 +31,7 @@ contract Demo is Script {
         string memory json = vm.readFile(path);
         IPoolManager manager = IPoolManager(vm.parseJsonAddress(json, ".poolManager"));
         ZenithHook hook = ZenithHook(vm.parseJsonAddress(json, ".hook"));
+        ZenithSettler settler = ZenithSettler(vm.parseJsonAddress(json, ".settler"));
         PoolKey memory key = PoolKey(
             Currency.wrap(vm.parseJsonAddress(json, ".token0")),
             Currency.wrap(vm.parseJsonAddress(json, ".token1")),
@@ -50,6 +52,7 @@ contract Demo is Script {
             token.approve(address(hook), type(uint256).max);
             token.approve(address(swapRouter), type(uint256).max);
             token.approve(address(liquidityRouter), type(uint256).max);
+            token.approve(address(settler), type(uint256).max);
         }
 
         // An ordinary LP, so swaps have depth beyond the sleeves.
@@ -63,6 +66,7 @@ contract Demo is Script {
         // A curator sleeve with a two-range shape. Here the broadcaster plays the curator.
         uint256 sleeve = hook.openSleeve(me);
         hook.fund(sleeve, 10e18, 10e18);
+        settler.postBond(sleeve, 2e18); // at least 5% of the sleeve's value, before it may shape
         ZenithHook.Range[] memory shape = new ZenithHook.Range[](2);
         shape[0] = ZenithHook.Range(-600, 600, 100e18);
         shape[1] = ZenithHook.Range(-120, 120, 200e18);

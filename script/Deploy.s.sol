@@ -12,8 +12,9 @@ import {Script, console2} from "forge-std/Script.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {ZenithHook} from "../src/ZenithHook.sol";
+import {ZenithSettler} from "../src/ZenithSettler.sol";
 
-/// @notice Deploys Zenith and initialises its pool.
+/// @notice Deploys Zenith (hook, its math library and settler) and initialises its pool.
 ///
 /// Local node:       forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key <key>
 /// Unichain Sepolia: forge script script/Deploy.s.sol --rpc-url https://sepolia.unichain.org --broadcast --account <name>
@@ -42,11 +43,14 @@ contract Deploy is Script {
         hook = new ZenithHook{salt: salt}(manager, broadcaster);
         require(address(hook) == expected, "hook deployed at an unexpected address");
 
+        ZenithSettler settler = new ZenithSettler(hook);
+        hook.setSettler(address(settler));
+
         key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(address(hook)));
         manager.initialize(key, SQRT_PRICE_1_1);
         vm.stopBroadcast();
 
-        _record(manager, hook, key, broadcaster);
+        _record(manager, hook, settler, key, broadcaster);
     }
 
     function _poolManager(address owner) internal returns (IPoolManager) {
@@ -66,12 +70,19 @@ contract Deploy is Script {
         return a < b ? (Currency.wrap(a), Currency.wrap(b)) : (Currency.wrap(b), Currency.wrap(a));
     }
 
-    function _record(IPoolManager manager, ZenithHook hook, PoolKey memory key, address initializer) internal {
+    function _record(
+        IPoolManager manager,
+        ZenithHook hook,
+        ZenithSettler settler,
+        PoolKey memory key,
+        address initializer
+    ) internal {
         string memory json = "deployment";
         vm.serializeUint(json, "chainId", block.chainid);
         vm.serializeUint(json, "block", block.number);
         vm.serializeAddress(json, "poolManager", address(manager));
         vm.serializeAddress(json, "hook", address(hook));
+        vm.serializeAddress(json, "settler", address(settler));
         vm.serializeAddress(json, "initializer", initializer);
         vm.serializeAddress(json, "token0", Currency.unwrap(key.currency0));
         vm.serializeAddress(json, "token1", Currency.unwrap(key.currency1));
