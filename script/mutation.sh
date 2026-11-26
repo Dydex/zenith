@@ -13,16 +13,22 @@ cd "$(dirname "$0")/.."
 TARGET=src/ZenithHook.sol
 BACKUP=$(mktemp)
 cp "$TARGET" "$BACKUP"
-trap 'cp "$BACKUP" "$TARGET"; rm -f "$BACKUP"' EXIT
+SETTLER=src/ZenithSettler.sol
+SETTLER_BACKUP=$(mktemp)
+cp "$SETTLER" "$SETTLER_BACKUP"
+trap 'cp "$BACKUP" "$TARGET"; cp "$SETTLER_BACKUP" "$SETTLER"; rm -f "$BACKUP" "$SETTLER_BACKUP"' EXIT
 
 survived=0
 
 # Applies a sed expression, confirms the file changed, runs the given test contract and reports the outcome.
 mutate() {
-    local name=$1 expr=$2 suite=${3:-ZenithTwinFeesTest}
+    local name=$1 expr=$2 suite=${3:-ZenithTwinFeesTest} file=${4:-hook}
     cp "$BACKUP" "$TARGET"
-    sed -i "$expr" "$TARGET"
-    if cmp -s "$BACKUP" "$TARGET"; then
+    cp "$SETTLER_BACKUP" "$SETTLER"
+    local target=$TARGET original=$BACKUP
+    if [ "$file" = settler ]; then target=$SETTLER original=$SETTLER_BACKUP; fi
+    sed -i "$expr" "$target"
+    if cmp -s "$original" "$target"; then
         echo "ERROR    $name: mutation did not apply (source changed?)"
         exit 2
     fi
@@ -52,6 +58,13 @@ mutate "score against current liquidity instead of period-start liquidity" \
 mutate "deposits counted as skill" \
     's/score.held0 += amount0;/score.held0 += 0;/' \
     ZenithScoringTest
+
+mutate "high-water mark never advances (gains paid again)" \
+    's/            account.highWater = cumulative;/            account.highWater = account.highWater;/' \
+    ZenithSettlerTest settler
+mutate "slash kept by the settler instead of reaching depositors" \
+    's/hook.settle(sleeveId, int256(slashed), address(0), false);/hook.settle(sleeveId, 0, address(0), false);/' \
+    ZenithSettlerTest settler
 
 if [ "$survived" -gt 0 ]; then
     echo "$survived mutant(s) survived"
