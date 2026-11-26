@@ -115,9 +115,14 @@ contract ZenithLedgerTest is ZenithTestBase {
             uint256 id = seed % (n + 1); // includes the control sleeve
             uint128 a0 = uint128(bound(seed >> 8, 0, 1e30));
             uint128 a1 = uint128(bound(seed >> 128, 0, 1e30));
-            hook.fund(id, a0, a1);
-            expected0[id] += a0;
-            expected1[id] += a1;
+            if (a0 == 0 && a1 == 0) continue;
+            try hook.fund(id, a0, a1) returns (uint256, uint128 used0, uint128 used1) {
+                expected0[id] += used0;
+                expected1[id] += used1;
+            } catch (bytes memory reason) {
+                // A later deposit takes the sleeve's ratio; if one side is missing it buys nothing.
+                assertEq(bytes4(reason), ZenithHook.ZeroDeposit.selector, "only an empty deposit may fail");
+            }
         }
 
         _assertLedgerEqualsClaims();

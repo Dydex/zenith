@@ -83,7 +83,8 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         SetShape,
         Poke,
         DeployControl,
-        RollPeriod
+        RollPeriod,
+        Withdraw
     }
 
     /// @notice The only address allowed to initialise the pool this hook serves. It is passed in explicitly:
@@ -97,6 +98,11 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     mapping(uint256 sleeveId => Range[]) internal _ranges;
     mapping(uint256 sleeveId => Score) internal _scores;
 
+    /// @notice Depositor shares of each sleeve. A share is a claim on an exact fraction of everything the sleeve
+    /// holds, idle tokens and positions alike.
+    mapping(uint256 sleeveId => uint256) public totalShares;
+    mapping(uint256 sleeveId => mapping(address owner => uint256)) public sharesOf;
+
     /// @notice Cumulative skill of the control per unit of liquidity, scaled by 1e18. Every curator is compared
     /// with this index.
     int256 public controlIndex;
@@ -106,7 +112,12 @@ contract ZenithHook is BaseHook, IUnlockCallback {
 
     event PoolBound(PoolId indexed poolId);
     event SleeveOpened(uint256 indexed sleeveId, address indexed curator);
-    event SleeveFunded(uint256 indexed sleeveId, address indexed funder, uint256 amount0, uint256 amount1);
+    event SleeveFunded(
+        uint256 indexed sleeveId, address indexed funder, uint256 amount0, uint256 amount1, uint256 shares
+    );
+    event Withdrawn(
+        uint256 indexed sleeveId, address indexed owner, address to, uint256 shares, uint256 amount0, uint256 amount1
+    );
     event ShapeSet(uint256 indexed sleeveId, uint256 rangeCount);
     event FeesCollected(uint256 indexed sleeveId, uint256 fees0, uint256 fees1);
     event Checkpointed(uint256 indexed sleeveId, int256 skill, int256 excess);
@@ -128,6 +139,8 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     error DuplicateRange(uint256 index);
     error InsufficientIdle();
     error PeriodNotOver();
+    error ZeroDeposit();
+    error InsufficientShares();
 
     constructor(IPoolManager _poolManager, address _initializer) BaseHook(_poolManager) {
         if (_initializer == address(0)) revert ZeroInitializer();
@@ -176,12 +189,31 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         emit SleeveOpened(sleeveId, curator);
     }
 
-    /// @notice Adds tokens to a sleeve's idle balance. Tokens are pulled from the caller into the PoolManager
-    /// and held there as ERC-6909 claims owned by this hook.
-    /// @dev Depositor shares are not tracked yet; funding is a sleeve-level credit for now.
-    function fund(uint256 sleeveId, uint128 amount0, uint128 amount1) external {
+    /// @notice Deposits into a sleeve in kind and mints shares. After the first deposit, tokens are taken in the
+    /// ratio the sleeve already holds, up to the amounts given, so a deposit buys an exact fraction of the sleeve
+    /// at any price. Tokens move into the PoolManager and are held there as ERC-6909 claims owned by this hook.
+    function fund(uint256 sleeveId, uint128 amount0Max, uint128 amount1Max)
+        external
+        returns (uint256 shares, uint128 amount0, uint128 amount1)
+    {
         if (!_sleeves[sleeveId].exists) revert UnknownSleeve();
-        poolManager.unlock(abi.encode(Action.Fund, abi.encode(msg.sender, sleeveId, amount0, amount1)));
+        bytes memory result =
+            poolManager.unlock(abi.encode(Action.Fund, abi.encode(msg.sender, sleeveId, amount0Max, amount1Max)));
+        (shares, amount0, amount1) = abi.decode(result, (uint256, uint128, uint128));
+    }
+
+    /// @notice Burns shares and sends the owner its fraction of the sleeve: of the idle tokens and of every
+    /// position, which the hook removes itself. The curator is not involved.
+    function withdraw(uint256 sleeveId, uint256 shares, address to)
+        external
+        returns (uint256 amount0, uint256 amount1)
+    {
+        if (shares == 0 || sharesOf[sleeveId][msg.sender] < shares) {
+            revert InsufficientShares();
+        }
+        bytes memory result =
+            poolManager.unlock(abi.encode(Action.Withdraw, abi.encode(msg.sender, sleeveId, shares, to)));
+        (amount0, amount1) = abi.decode(result, (uint256, uint256));
     }
 
     /// @notice Replaces a sleeve's liquidity shape. Only the sleeve's curator can call this, and the hook
@@ -252,10 +284,15 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     function unlockCallback(bytes calldata data) external onlyPoolManager returns (bytes memory) {
         (Action action, bytes memory payload) = abi.decode(data, (Action, bytes));
         if (action == Action.Fund) {
-            (address funder, uint256 sleeveId, uint128 amount0, uint128 amount1) =
+            (address funder, uint256 sleeveId, uint128 amount0Max, uint128 amount1Max) =
                 abi.decode(payload, (address, uint256, uint128, uint128));
             _checkpoint(sleeveId);
-            _fund(funder, sleeveId, amount0, amount1);
+            return _fund(funder, sleeveId, amount0Max, amount1Max);
+        } else if (action == Action.Withdraw) {
+            (address owner, uint256 sleeveId, uint256 shares, address to) =
+                abi.decode(payload, (address, uint256, uint256, address));
+            _checkpoint(sleeveId);
+            return _withdraw(owner, sleeveId, shares, to);
         } else if (action == Action.SetShape) {
             (uint256 sleeveId, Range[] memory ranges) = abi.decode(payload, (uint256, Range[]));
             _checkpoint(sleeveId);
@@ -287,8 +324,24 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     // Internal: funding and shapes
     // ------------------------------------------------------------------
 
-    function _fund(address funder, uint256 sleeveId, uint128 amount0, uint128 amount1) internal {
+    function _fund(address funder, uint256 sleeveId, uint128 amount0Max, uint128 amount1Max)
+        internal
+        returns (bytes memory)
+    {
         PoolKey memory key = poolKey;
+        Score storage score = _scores[sleeveId];
+        uint256 supply = totalShares[sleeveId];
+        uint256 shares;
+        uint128 amount0;
+        uint128 amount1;
+        if (supply == 0) {
+            // The first deposit sets the ratio. Shares start at its value in token1.
+            (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
+            (shares, amount0, amount1) = (_value(amount0Max, amount1Max, sqrtPriceX96), amount0Max, amount1Max);
+        } else {
+            (shares, amount0, amount1) = _proportional(supply, score.held0, score.held1, amount0Max, amount1Max);
+        }
+        if (shares == 0) revert ZeroDeposit();
 
         // Pay the tokens in from the funder, then take the same amount back as claims for the hook.
         key.currency0.settle(poolManager, funder, amount0, false);
@@ -299,11 +352,114 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         Sleeve storage sleeve = _sleeves[sleeveId];
         sleeve.idle0 += amount0;
         sleeve.idle1 += amount1;
-        // New money is added after the checkpoint, so it never counts as skill.
-        Score storage score = _scores[sleeveId];
+        // New money is added after the checkpoint, so it never counts as skill. It lands idle and leaves the
+        // curator's baseline alone; deploying it is the curator's decision and is scored like any other.
         score.held0 += amount0;
         score.held1 += amount1;
-        emit SleeveFunded(sleeveId, funder, amount0, amount1);
+        totalShares[sleeveId] = supply + shares;
+        sharesOf[sleeveId][funder] += shares;
+        emit SleeveFunded(sleeveId, funder, amount0, amount1, shares);
+        return abi.encode(shares, amount0, amount1);
+    }
+
+    /// @dev Shares for an in-kind deposit at the sleeve's current ratio; amounts round up so existing holders never
+    /// lose to rounding.
+    function _proportional(uint256 supply, uint256 held0, uint256 held1, uint128 max0, uint128 max1)
+        internal
+        pure
+        returns (uint256 shares, uint128 amount0, uint128 amount1)
+    {
+        shares = type(uint256).max;
+        if (held0 > 0) shares = FullMath.mulDiv(max0, supply, held0);
+        if (held1 > 0) shares = _min(shares, FullMath.mulDiv(max1, supply, held1));
+        if (shares == type(uint256).max) return (0, 0, 0);
+        while (shares > 0) {
+            uint256 need0 = FullMath.mulDivRoundingUp(shares, held0, supply);
+            uint256 need1 = FullMath.mulDivRoundingUp(shares, held1, supply);
+            if (need0 <= max0 && need1 <= max1) return (shares, uint128(need0), uint128(need1));
+            --shares;
+        }
+        return (0, 0, 0);
+    }
+
+    /// @dev Removes the owner's fraction of every position, adds the same fraction of idle tokens and sends both.
+    function _withdraw(address owner, uint256 sleeveId, uint256 shares, address to) internal returns (bytes memory) {
+        uint256 supply = totalShares[sleeveId];
+        (int256 net0, int256 net1) = _removeFraction(sleeveId, shares, supply);
+        (uint256 amount0, uint256 amount1) = _payOut(sleeveId, shares, supply, net0, net1, to);
+
+        totalShares[sleeveId] = supply - shares;
+        sharesOf[sleeveId][owner] -= shares;
+        _rebase(sleeveId, supply - shares, supply);
+        emit Withdrawn(sleeveId, owner, to, shares, amount0, amount1);
+        return abi.encode(amount0, amount1);
+    }
+
+    /// @dev After a withdrawal at a checkpoint: records what the sleeve now holds and shrinks the curator's baseline
+    /// in proportion, so a depositor leaving is never scored as the curator's timing.
+    function _rebase(uint256 sleeveId, uint256 remaining, uint256 supply) internal {
+        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(poolKey.toId());
+        (uint256 held0, uint256 held1) = _holdings(sleeveId, sqrtPriceX96);
+        Score storage score = _scores[sleeveId];
+        score.held0 = held0.toUint128();
+        score.held1 = held1.toUint128();
+        score.startInRange = FullMath.mulDiv(score.startInRange, remaining, supply).toUint128();
+        score.inRange = _inRangeLiquidity(sleeveId, tick);
+    }
+
+    /// @dev Takes shares/supply of each position's liquidity out of the pool, dropping ranges that reach zero.
+    function _removeFraction(uint256 sleeveId, uint256 shares, uint256 supply)
+        internal
+        returns (int256 net0, int256 net1)
+    {
+        PoolKey memory key = poolKey;
+        bytes32 salt = sleeveSalt(sleeveId);
+        Range[] storage ranges = _ranges[sleeveId];
+        for (uint256 i = ranges.length; i > 0; --i) {
+            Range storage r = ranges[i - 1];
+            uint128 removed = FullMath.mulDiv(r.liquidity, shares, supply).toUint128();
+            if (removed == 0) continue;
+            (BalanceDelta delta,) = poolManager.modifyLiquidity(
+                key,
+                ModifyLiquidityParams({
+                    tickLower: r.tickLower,
+                    tickUpper: r.tickUpper,
+                    liquidityDelta: -uint256(removed).toInt256(),
+                    salt: salt
+                }),
+                ""
+            );
+            net0 += delta.amount0();
+            net1 += delta.amount1();
+            r.liquidity -= removed;
+            if (r.liquidity == 0) {
+                ranges[i - 1] = ranges[ranges.length - 1];
+                ranges.pop();
+            }
+        }
+    }
+
+    /// @dev Burns the owner's fraction of idle claims and sends it, with the tokens freed from positions, to `to`.
+    function _payOut(uint256 sleeveId, uint256 shares, uint256 supply, int256 net0, int256 net1, address to)
+        internal
+        returns (uint256 amount0, uint256 amount1)
+    {
+        PoolKey memory key = poolKey;
+        Sleeve storage sleeve = _sleeves[sleeveId];
+        uint256 idle0 = FullMath.mulDiv(sleeve.idle0, shares, supply);
+        uint256 idle1 = FullMath.mulDiv(sleeve.idle1, shares, supply);
+        sleeve.idle0 -= idle0.toUint128();
+        sleeve.idle1 -= idle1.toUint128();
+        key.currency0.settle(poolManager, address(this), idle0, true);
+        key.currency1.settle(poolManager, address(this), idle1, true);
+        amount0 = idle0 + net0.toUint256();
+        amount1 = idle1 + net1.toUint256();
+        key.currency0.take(poolManager, to, amount0, false);
+        key.currency1.take(poolManager, to, amount1, false);
+    }
+
+    function _min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
     }
 
     /// @dev Removes every current position of the sleeve, adds the new ranges, then settles the net
