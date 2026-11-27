@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Mutation check for Zenith's fee accounting.
+# Mutation check for Zenith's accounting, scoring, settlement and attack defences.
 #
-# Plants one deliberate bug at a time in src/ZenithHook.sol and runs the tests that should catch it: the twin fee
-# tests for accounting bugs, the scoring tests for scoring bugs. Each bug must make those tests fail ("killed").
+# Plants one deliberate bug at a time in src/ZenithHook.sol or src/ZenithSettler.sol and runs the tests that should
+# catch it: twin fee tests for accounting, scoring tests for scoring, settler tests for settlement and the attack
+# tests for the defences. Each bug must make those tests fail ("killed").
 # A bug the tests miss ("survived") means the tests are weaker than they claim.
 # The original file is always restored, even if the script is interrupted.
 #
@@ -56,15 +57,24 @@ mutate "score against current liquidity instead of period-start liquidity" \
     's/int256 expected = start \* (controlIndex - score.indexLast)/int256 expected = uint256(score.inRange).toInt256() * (controlIndex - score.indexLast)/' \
     ZenithScoringTest
 mutate "deposits counted as skill" \
-    's/score.held0 += amount0;/score.held0 += 0;/' \
+    's/        _rebase(sleeveId, supply + shares, supply);/        \/\/ no rebase/' \
     ZenithScoringTest
+mutate "scores valued at the spot price, not the block-open price" \
+    's/if (open.blockNumber == block.number) return (open.sqrtPriceX96, open.tick);/if (false) return (open.sqrtPriceX96, open.tick);/' \
+    ZenithAttacksTest
+mutate "deposits stay idle instead of buying into positions" \
+    's/(int256 net0, int256 net1) = _scaleRanges(sleeveId, shares, supply, true);/(int256 net0, int256 net1) = (int256(0), int256(0));/' \
+    ZenithAttacksTest
 
 mutate "high-water mark never advances (gains paid again)" \
     's/            account.highWater = cumulative;/            account.highWater = account.highWater;/' \
     ZenithSettlerTest settler
 mutate "slash kept by the settler instead of reaching depositors" \
-    's/hook.settle(sleeveId, int256(slashed), address(0), false);/hook.settle(sleeveId, 0, address(0), false);/' \
+    's/hook.settle(sleeveId, int256(released), address(0), false);/hook.settle(sleeveId, 0, address(0), false);/' \
     ZenithSettlerTest settler
+mutate "slash released all at once" \
+    's/released = elapsed >= left ? pending : pending \* elapsed \/ left;/released = pending;/' \
+    ZenithAttacksTest settler
 
 if [ "$survived" -gt 0 ]; then
     echo "$survived mutant(s) survived"
