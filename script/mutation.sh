@@ -1,33 +1,36 @@
 #!/usr/bin/env bash
 # Mutation check for Zenith's accounting, scoring, settlement and attack defences.
 #
-# Plants one deliberate bug at a time in src/ZenithHook.sol or src/ZenithSettler.sol and runs the tests that should
+# Plants one deliberate bug at a time in one of Zenith's contracts and runs the tests that should
 # catch it: twin fee tests for accounting, scoring tests for scoring, settler tests for settlement and the attack
-# tests for the defences. Each bug must make those tests fail ("killed").
+# tests for the defences, the Reactive tests for automation. Each bug must make those tests fail ("killed").
 # A bug the tests miss ("survived") means the tests are weaker than they claim.
-# The original file is always restored, even if the script is interrupted.
+# The original files are always restored, even if the script is interrupted.
 #
 # Usage: script/mutation.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-TARGET=src/ZenithHook.sol
-BACKUP=$(mktemp)
-cp "$TARGET" "$BACKUP"
-SETTLER=src/ZenithSettler.sol
-SETTLER_BACKUP=$(mktemp)
-cp "$SETTLER" "$SETTLER_BACKUP"
-trap 'cp "$BACKUP" "$TARGET"; cp "$SETTLER_BACKUP" "$SETTLER"; rm -f "$BACKUP" "$SETTLER_BACKUP"' EXIT
+FILES=(src/ZenithHook.sol src/ZenithSettler.sol src/ZenithKeeper.sol src/ZenithReactive.sol)
+BACKUP=$(mktemp -d)
+for f in "${FILES[@]}"; do cp "$f" "$BACKUP/$(basename "$f")"; done
+restore() { for f in "${FILES[@]}"; do cp "$BACKUP/$(basename "$f")" "$f"; done; }
+trap 'restore; rm -rf "$BACKUP"' EXIT
 
 survived=0
 
 # Applies a sed expression, confirms the file changed, runs the given test contract and reports the outcome.
 mutate() {
     local name=$1 expr=$2 suite=${3:-ZenithTwinFeesTest} file=${4:-hook}
-    cp "$BACKUP" "$TARGET"
-    cp "$SETTLER_BACKUP" "$SETTLER"
-    local target=$TARGET original=$BACKUP
-    if [ "$file" = settler ]; then target=$SETTLER original=$SETTLER_BACKUP; fi
+    restore
+    local target
+    case "$file" in
+        hook) target=src/ZenithHook.sol ;;
+        settler) target=src/ZenithSettler.sol ;;
+        keeper) target=src/ZenithKeeper.sol ;;
+        reactive) target=src/ZenithReactive.sol ;;
+    esac
+    local original="$BACKUP/$(basename "$target")"
     sed -i "$expr" "$target"
     if cmp -s "$original" "$target"; then
         echo "ERROR    $name: mutation did not apply (source changed?)"
@@ -49,7 +52,7 @@ mutate "one wei skimmed on every collection" \
     's/uint256 received = net.toUint256();/uint256 received = net.toUint256() - (net > 1 ? 1 : 0);/'
 
 # The fee-collection loop in _poke skips its last range.
-poke_loop=$(awk '/function _poke\(/{f=1} f && /for \(uint256 i; i < current.length; \+\+i\)/{print NR; exit}' "$BACKUP")
+poke_loop=$(awk '/function _poke\(/{f=1} f && /for \(uint256 i; i < current.length; \+\+i\)/{print NR; exit}' "$BACKUP/ZenithHook.sol")
 mutate "fee collection skips the last range" \
     "${poke_loop}s/i < current.length/i + 1 < current.length/"
 
@@ -75,6 +78,16 @@ mutate "slash kept by the settler instead of reaching depositors" \
 mutate "slash released all at once" \
     's/released = elapsed >= left ? pending : pending \* elapsed \/ left;/released = pending;/' \
     ZenithAttacksTest settler
+
+mutate "keeper never releases vested slashes" \
+    's/if (pending == 0) return false;/return false;/' \
+    ZenithReactiveTest keeper
+mutate "reactive contract checks the depositor's address instead of the sleeve" \
+    's/(address(0), log.topic_1)/(address(0), log.topic_2)/' \
+    ZenithReactiveTest reactive
+mutate "reactive contract trusts a Cron topic from any emitter" \
+    's/if (log.topic_0 == cronTopic \&\& log._contract == address(service)) {/if (log.topic_0 == cronTopic) {/' \
+    ZenithReactiveTest reactive
 
 if [ "$survived" -gt 0 ]; then
     echo "$survived mutant(s) survived"
