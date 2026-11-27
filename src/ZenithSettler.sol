@@ -13,8 +13,11 @@ import {ZenithMath} from "./ZenithMath.sol";
 /// @notice Holds curator bonds and settles each scoring period symmetrically. A curator earns a share of its
 /// excess skill when its cumulative excess reaches a new high, and pays the same share of a new low to its
 /// depositors from its bond. Both marks are cumulative, so a curator who gains and gives back the same amount is
-/// neither paid twice nor slashed for the wobble.
-/// @dev Bonds are in token1 and stay in the PoolManager as ERC-6909 claims owned by this contract.
+/// neither paid twice nor slashed for the wobble. A slash is released to the depositors evenly over the next
+/// period rather than all at once, so depositing just before a settlement and leaving just after earns almost none
+/// of it.
+/// @dev Bonds are in token1 and stay in the PoolManager as ERC-6909 claims owned by this contract, as do slashes
+/// waiting to be released.
 contract ZenithSettler is IZenithBond, IUnlockCallback {
     using CurrencySettler for Currency;
 
@@ -32,6 +35,9 @@ contract ZenithSettler is IZenithBond, IUnlockCallback {
         int256 highWater; // highest cumulative excess paid on
         int256 lowWater; // lowest cumulative excess slashed for
         uint256 feeOwed; // fee earned but not yet paid because the sleeve held too little token1
+        uint256 pending; // slashed bond not yet released to the sleeve's depositors
+        uint64 lastRelease; // when pending was last released
+        uint64 releaseEnd; // when all of pending will have been released
     }
 
     ZenithHook public immutable hook;
@@ -43,6 +49,7 @@ contract ZenithSettler is IZenithBond, IUnlockCallback {
     event BondWithdrawn(uint256 indexed sleeveId, address indexed to, uint256 amount);
     event Settled(uint256 indexed sleeveId, int256 excess, int256 cumulative, uint256 feePaid, uint256 slashed);
     event ForceClosed(uint256 indexed sleeveId);
+    event Released(uint256 indexed sleeveId, uint256 amount);
 
     error NotPoolManager();
     error NotCurator();
@@ -129,8 +136,10 @@ contract ZenithSettler is IZenithBond, IUnlockCallback {
 
         if (slashed > 0) {
             account.bond -= slashed;
-            poolManager.transfer(address(hook), _currency1().toId(), slashed);
-            hook.settle(sleeveId, int256(slashed), address(0), false);
+            release(sleeveId);
+            account.pending += slashed;
+            account.lastRelease = uint64(block.timestamp);
+            account.releaseEnd = uint64(block.timestamp + hook.PERIOD());
         }
         if (account.feeOwed > 0) {
             feePaid = hook.settle(sleeveId, -int256(account.feeOwed), hook.getSleeve(sleeveId).curator, false);
@@ -139,6 +148,23 @@ contract ZenithSettler is IZenithBond, IUnlockCallback {
         if (!isBonded(sleeveId) && hook.getRanges(sleeveId).length > 0) _forceClose(sleeveId);
 
         emit Settled(sleeveId, excess, cumulative, feePaid, slashed);
+    }
+
+    /// @notice Releases the share of slashed bond that has vested since the last release to the sleeve's
+    /// depositors. Anyone can call it; Reactive Network calls it on a schedule.
+    function release(uint256 sleeveId) public returns (uint256 released) {
+        Account storage account = accounts[sleeveId];
+        uint256 pending = account.pending;
+        if (pending == 0) return 0;
+        uint256 left = account.releaseEnd - account.lastRelease;
+        uint256 elapsed = block.timestamp - account.lastRelease;
+        released = elapsed >= left ? pending : pending * elapsed / left;
+        if (released == 0) return 0;
+        account.pending = pending - released;
+        account.lastRelease = uint64(block.timestamp);
+        poolManager.transfer(address(hook), _currency1().toId(), released);
+        hook.settle(sleeveId, int256(released), address(0), false);
+        emit Released(sleeveId, released);
     }
 
     /// @notice Removes all of a sleeve's liquidity when its curator's bond no longer covers the minimum. Liquidity

@@ -65,7 +65,7 @@ contract ZenithSettlerTest is ZenithTestBase {
 
     function test_bondIsHeldAsClaimsBySettler() public {
         _bond(20e18);
-        (uint256 bond,,,,) = settler.accounts(sleeve);
+        (uint256 bond,,,,,,,) = settler.accounts(sleeve);
         assertEq(bond, 20e18);
         assertEq(manager.balanceOf(address(settler), currency1.toId()), 20e18, "bond held as claims");
         _assertLedgerEqualsClaims(); // the hook's ledger is untouched by bonds
@@ -136,10 +136,22 @@ contract ZenithSettlerTest is ZenithTestBase {
         assertLt(excess, 0, "the curator lost to the control");
         assertEq(slashed, uint256(-excess) * settler.SHARE_BPS() / 10_000, "20% of the shortfall");
         assertEq(fee, 0);
-        (uint256 bond,,,,) = settler.accounts(sleeve);
+        (uint256 bond,,,,, uint256 pending,,) = settler.accounts(sleeve);
         assertEq(bond, 20e18 - slashed, "taken from the bond");
-        assertEq(hook.getSleeve(sleeve).idle1 - idleBefore, slashed, "given to the sleeve's depositors");
-        assertEq(manager.balanceOf(address(settler), currency1.toId()), bond, "settler claims match bonds");
+        assertEq(pending, slashed, "held for release");
+        assertEq(hook.getSleeve(sleeve).idle1, idleBefore, "nothing released yet");
+        assertEq(manager.balanceOf(address(settler), currency1.toId()), bond + pending, "settler claims match");
+
+        // Released evenly over the next period: half after half of it, the rest at its end.
+        vm.warp(block.timestamp + hook.PERIOD() / 2);
+        settler.release(sleeve);
+        assertEq(hook.getSleeve(sleeve).idle1 - idleBefore, slashed / 2, "half released");
+        vm.warp(block.timestamp + hook.PERIOD());
+        settler.release(sleeve);
+        assertEq(hook.getSleeve(sleeve).idle1 - idleBefore, slashed, "all of it reached the depositors");
+        (,,,,, pending,,) = settler.accounts(sleeve);
+        assertEq(pending, 0);
+        assertEq(manager.balanceOf(address(settler), currency1.toId()), bond, "settler keeps only the bond");
         _assertLedgerEqualsClaims();
     }
 
@@ -189,7 +201,7 @@ contract ZenithSettlerTest is ZenithTestBase {
         vm.expectRevert(ZenithSettler.NotCurator.selector);
         settler.withdrawBond(sleeve, 1, curator);
 
-        (uint256 bond,,,,) = settler.accounts(sleeve);
+        (uint256 bond,,,,,,,) = settler.accounts(sleeve);
         uint256 before = currency1.balanceOf(curator);
         vm.prank(curator);
         settler.withdrawBond(sleeve, bond, curator);
