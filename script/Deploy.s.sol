@@ -12,9 +12,10 @@ import {Script, console2} from "forge-std/Script.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {ZenithHook} from "../src/ZenithHook.sol";
+import {ZenithKeeper} from "../src/ZenithKeeper.sol";
 import {ZenithSettler} from "../src/ZenithSettler.sol";
 
-/// @notice Deploys Zenith (hook, its math library and settler) and initialises its pool.
+/// @notice Deploys Zenith (hook, its math library, settler and keeper) and initialises its pool.
 ///
 /// Local node:       forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key <key>
 /// Unichain Sepolia: forge script script/Deploy.s.sol --rpc-url https://sepolia.unichain.org --broadcast --account <name>
@@ -22,9 +23,15 @@ import {ZenithSettler} from "../src/ZenithSettler.sol";
 /// The hook is deployed through the CREATE2 factory at an address mined to carry its permission flags. On a local
 /// node a fresh PoolManager is deployed; on Unichain Sepolia the official one is used. Unless TOKEN0 and TOKEN1 are
 /// set, two mintable demo tokens are deployed. Addresses are written to deployments/<chain id>.json.
+///
+/// The keeper receives Reactive Network callbacks through the chain's callback proxy and is funded with
+/// KEEPER_FUNDING wei (default 0.01 ether) to pay for them. It accepts callbacks only from reactive contracts
+/// deployed by this same account, so deploy script/DeployReactive.s.sol on Reactive Lasna with the same key. On a
+/// local node there is no proxy: the deployer stands in for it, so the demo can deliver callbacks by hand.
 contract Deploy is Script {
     uint256 internal constant UNICHAIN_SEPOLIA = 1301;
     address internal constant UNICHAIN_SEPOLIA_POOL_MANAGER = 0x00B036B58a818B1BC34d502D3fE730Db729e62AC;
+    address internal constant UNICHAIN_SEPOLIA_CALLBACK_PROXY = 0x775c9B990ADe401060B78D0e98684eEf8d2466C1;
 
     uint24 internal constant FEE = 3000;
     int24 internal constant TICK_SPACING = 60;
@@ -49,12 +56,19 @@ contract Deploy is Script {
 
         ZenithSettler settler = new ZenithSettler(hook);
         hook.setSettler(address(settler));
+        ZenithKeeper keeper = _keeper(settler, broadcaster);
 
         key = PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(address(hook)));
         manager.initialize(key, SQRT_PRICE_1_1);
         vm.stopBroadcast();
 
-        _record(manager, hook, settler, key, broadcaster);
+        _record(manager, hook, settler, keeper, key, broadcaster);
+    }
+
+    function _keeper(ZenithSettler settler, address broadcaster) internal returns (ZenithKeeper) {
+        if (block.chainid != UNICHAIN_SEPOLIA) return new ZenithKeeper(settler, broadcaster);
+        uint256 funding = vm.envOr("KEEPER_FUNDING", uint256(0.01 ether));
+        return new ZenithKeeper{value: funding}(settler, UNICHAIN_SEPOLIA_CALLBACK_PROXY);
     }
 
     function _poolManager(address owner) internal returns (IPoolManager) {
@@ -78,6 +92,7 @@ contract Deploy is Script {
         IPoolManager manager,
         ZenithHook hook,
         ZenithSettler settler,
+        ZenithKeeper keeper,
         PoolKey memory key,
         address initializer
     ) internal {
@@ -87,6 +102,7 @@ contract Deploy is Script {
         vm.serializeAddress(json, "poolManager", address(manager));
         vm.serializeAddress(json, "hook", address(hook));
         vm.serializeAddress(json, "settler", address(settler));
+        vm.serializeAddress(json, "keeper", address(keeper));
         vm.serializeAddress(json, "initializer", initializer);
         vm.serializeAddress(json, "token0", Currency.unwrap(key.currency0));
         vm.serializeAddress(json, "token1", Currency.unwrap(key.currency1));
