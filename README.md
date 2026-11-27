@@ -30,6 +30,10 @@ Method, limits, corrections and an offline re-run are in [evidence/](evidence/RE
 | [`ZenithSettler`](src/ZenithSettler.sol) | Curator bonds and symmetric settlement of each period; the receiver for Reactive Network callbacks |
 | [`ZenithMath`](src/ZenithMath.sol) | Position valuation and deposit maths, linked as a library so the hook stays under the 24 KB size limit |
 
+## Security
+
+We attacked Zenith's own rules: price pushes, wash trading, and depositors timing their entry around swaps and settlements. Each attack is a test against the real contracts, with the numbers it produced, in the [threat model](docs/threat-model.md). Two were real holes and are fixed; the known limitations are listed there too.
+
 ## Partner integration: Reactive Network (planned)
 
 Zenith settles curator scores, fees and bonds in periods. Reactive Network closes each period automatically, with no keeper bot:
@@ -49,12 +53,13 @@ Zenith settles curator scores, fees and bonds in periods. Reactive Network close
 - [x] Mainnet evidence, reproducible offline
 - [x] Benchmark requirement pinned by test: a static narrow range must not count as skill
 - [x] Scoring rule chosen by attacking six candidates with history-only strategies on mainnet data ([evidence](evidence/README.md#choosing-the-scoring-rule))
-- [x] Depositor shares: in-kind deposits at the sleeve's ratio and pro-rata withdrawals of idle tokens and positions, neutral to the curator's score
+- [x] Depositor shares: deposits buy, and withdrawals return, the same fraction of every position and idle balance, neutral to the curator's score
 - [x] Skill scoring in the hook: liquidity changes since period start, times the control's per-liquidity result above its long-run average (static and idle curators score zero on a real PoolManager; timing scores; deposits never count)
 - [x] Symmetric curator fee with a bond: 20% of new highs in cumulative excess to the curator, 20% of new lows from its bond to depositors, a 5% minimum bond, and forced close when it falls short ([`ZenithSettler`](src/ZenithSettler.sol))
 - [x] Deploy script (mined hook address, CREATE2) and an end-to-end demo script, run on a local node
-- [ ] Settlement price clamp
-- [ ] Attack tests (wash trading, price pushes, idle curators)
+- [x] Settlement price clamp: scores and bonds valued at the block-open price, recorded in `beforeSwap` with no delta or fee override
+- [x] Attack tests: price pushes around settlement, forced close and bonding; wash trading; deposit and slash sandwiches ([threat model](docs/threat-model.md)). Two were real holes and are fixed
+- [x] Slashed bond released to depositors over the next period
 - [ ] Reactive Network settlement on Unichain Sepolia and Reactive Lasna
 - [ ] Twin-pool demo, gas report, frontend
 
@@ -84,7 +89,7 @@ forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --p
 forge script script/Demo.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key <anvil key>
 ```
 
-To check that the fee tests can actually catch accounting bugs, run the mutation check. It plants one deliberate bug at a time in the hook and expects the twin fee tests to fail on each:
+To check that the tests can actually catch bugs, run the mutation check. It plants one deliberate bug at a time in the hook or settler (accounting, scoring, settlement and each attack defence) and expects the relevant tests to fail on each:
 
 ```bash
 script/mutation.sh
