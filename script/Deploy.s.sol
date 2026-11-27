@@ -38,8 +38,12 @@ contract Deploy is Script {
         (Currency currency0, Currency currency1) = _tokens();
 
         bytes memory args = abi.encode(manager, broadcaster);
-        (address expected, bytes32 salt) =
-            HookMiner.find(CREATE2_FACTORY, uint160(Hooks.BEFORE_INITIALIZE_FLAG), type(ZenithHook).creationCode, args);
+        (address expected, bytes32 salt) = HookMiner.find(
+            CREATE2_FACTORY,
+            uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG),
+            type(ZenithHook).creationCode,
+            args
+        );
         hook = new ZenithHook{salt: salt}(manager, broadcaster);
         require(address(hook) == expected, "hook deployed at an unexpected address");
 

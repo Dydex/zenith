@@ -223,8 +223,8 @@ contract ZenithSettlerTest is ZenithTestBase {
         _shape(narrow);
         for (uint256 i; i < 20; ++i) {
             vm.warp(block.timestamp + 1 hours);
-            swap(key, true, -20e18, ZERO_BYTES);
-            swap(key, false, -20e18, ZERO_BYTES);
+            _trade(true, -20e18);
+            _trade(false, -20e18);
         }
         _shape(narrow / 4);
     }
@@ -238,7 +238,7 @@ contract ZenithSettlerTest is ZenithTestBase {
         _shape(narrow / 4);
         vm.warp(block.timestamp + 1 days);
         _shape(narrow);
-        swap(key, true, -int256(size), ZERO_BYTES);
+        _trade(true, -int256(size));
         _shape(narrow / 4);
     }
 

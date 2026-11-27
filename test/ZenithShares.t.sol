@@ -64,7 +64,7 @@ contract ZenithSharesTest is ZenithTestBase {
         vm.prank(alice);
         (uint256 shares,,) = hook.fund(sleeve, 100e18, 100e18);
         _shape(-600, 600, 1000e18);
-        swap(key, true, -5e18, ZERO_BYTES);
+        _trade(true, -5e18);
 
         vm.prank(alice);
         hook.withdraw(sleeve, shares, alice);
@@ -97,8 +97,8 @@ contract ZenithSharesTest is ZenithTestBase {
         (uint256 shares,,) = hook.fund(sleeve, 100e18, 100e18);
         _shape(-600, 600, 1000e18);
         for (uint256 i; i < 5; ++i) {
-            swap(key, true, -10e18, ZERO_BYTES);
-            swap(key, false, -10e18, ZERO_BYTES);
+            _trade(true, -10e18);
+            _trade(false, -10e18);
         }
         hook.poke(sleeve);
         int256 before = hook.getScore(sleeve).excess;
@@ -108,8 +108,8 @@ contract ZenithSharesTest is ZenithTestBase {
         vm.prank(alice);
         hook.fund(sleeve, 20e18, 20e18);
         for (uint256 i; i < 5; ++i) {
-            swap(key, true, -10e18, ZERO_BYTES);
-            swap(key, false, -10e18, ZERO_BYTES);
+            _trade(true, -10e18);
+            _trade(false, -10e18);
         }
         hook.poke(sleeve);
         // The curator never changed its shape, so depositors coming and going must not create skill or blame.

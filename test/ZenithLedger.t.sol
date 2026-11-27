@@ -151,7 +151,8 @@ contract ZenithLedgerTest is ZenithTestBase {
     }
 
     function _deployFreshHook() internal returns (ZenithHook fresh) {
-        address target = address(uint160(Hooks.BEFORE_INITIALIZE_FLAG) | (uint160(0x5555) << 144));
+        address target =
+            address(uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG) | (uint160(0x5555) << 144));
         deployCodeTo("ZenithHook.sol:ZenithHook", abi.encode(manager, address(this)), target);
         fresh = ZenithHook(target);
     }

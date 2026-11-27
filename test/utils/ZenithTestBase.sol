@@ -20,7 +20,8 @@ abstract contract ZenithTestBase is Test, Deployers {
     using StateLibrary for IPoolManager;
 
     ZenithHook internal hook;
-    address internal constant HOOK_ADDRESS = address(uint160(Hooks.BEFORE_INITIALIZE_FLAG) | (uint160(0x4444) << 144));
+    address internal constant HOOK_ADDRESS =
+        address(uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG) | (uint160(0x4444) << 144));
 
     function setUp() public virtual {
         deployFreshManagerAndRouters();
@@ -36,6 +37,13 @@ abstract contract ZenithTestBase is Test, Deployers {
     }
 
     /// @dev Liquidity from an ordinary LP, so swaps have depth outside the sleeves.
+    /// @dev A swap in its own block, as real trades land. Zenith values scores at the block-open price, so a
+    /// checkpoint only sees a move once a later block has opened at the moved price.
+    function _trade(bool zeroForOne, int256 amountSpecified) internal {
+        swap(key, zeroForOne, amountSpecified, ZERO_BYTES);
+        vm.roll(block.number + 1);
+    }
+
     function _addExternalLiquidity(int24 tickLower, int24 tickUpper, uint256 liquidity) internal {
         modifyLiquidityRouter.modifyLiquidity(
             key,

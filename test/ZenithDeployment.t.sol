@@ -19,8 +19,12 @@ contract ZenithDeploymentTest is Test, Deployers {
 
         address initializer = makeAddr("initializer");
         bytes memory args = abi.encode(manager, initializer);
-        (address expected, bytes32 salt) =
-            HookMiner.find(CREATE2_FACTORY, uint160(Hooks.BEFORE_INITIALIZE_FLAG), type(ZenithHook).creationCode, args);
+        (address expected, bytes32 salt) = HookMiner.find(
+            CREATE2_FACTORY,
+            uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG),
+            type(ZenithHook).creationCode,
+            args
+        );
 
         (bool ok, bytes memory deployed) =
             CREATE2_FACTORY.call(abi.encodePacked(salt, type(ZenithHook).creationCode, args));
@@ -38,7 +42,9 @@ contract ZenithDeploymentTest is Test, Deployers {
         deployFreshManagerAndRouters();
         vm.expectRevert(ZenithHook.ZeroInitializer.selector);
         deployCodeTo(
-            "ZenithHook.sol:ZenithHook", abi.encode(manager, address(0)), address(uint160(Hooks.BEFORE_INITIALIZE_FLAG))
+            "ZenithHook.sol:ZenithHook",
+            abi.encode(manager, address(0)),
+            address(uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG))
         );
     }
 }

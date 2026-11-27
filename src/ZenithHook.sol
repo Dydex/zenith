@@ -11,10 +11,11 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {ZenithMath} from "./ZenithMath.sol";
 
@@ -83,6 +84,13 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         uint64 periodStart; // zero until the sleeve's first shape
     }
 
+    /// @notice The pool's price at the start of a block, taken before that block's first swap.
+    struct BlockOpen {
+        uint160 sqrtPriceX96;
+        int24 tick;
+        uint64 blockNumber;
+    }
+
     enum Action {
         Fund,
         SetShape,
@@ -119,6 +127,8 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     /// @notice Holds curator bonds and settles each period. Once set, curators need a bond to shape, and only the
     /// settler closes periods, so no period's result can be skipped.
     address public settler;
+
+    BlockOpen internal _open;
 
     event PoolBound(PoolId indexed poolId);
     event SleeveOpened(uint256 indexed sleeveId, address indexed curator);
@@ -163,6 +173,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory permissions) {
         permissions.beforeInitialize = true;
+        permissions.beforeSwap = true;
     }
 
     // ------------------------------------------------------------------
@@ -184,6 +195,29 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         emit PoolBound(key.toId());
         emit SleeveOpened(CONTROL_SLEEVE, address(0));
         return this.beforeInitialize.selector;
+    }
+
+    /// @dev Records the pool's price before the first swap of each block. It returns no delta and no fee
+    /// override, so the pool prices and routes exactly as a hookless pool would.
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata, bytes calldata)
+        internal
+        override
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        if (_open.blockNumber != block.number) {
+            (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(key.toId());
+            _open = BlockOpen(sqrtPriceX96, tick, uint64(block.number));
+        }
+        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+    }
+
+    /// @notice The pool's price at the start of the current block. Scores and bonds are valued at this price, so
+    /// pushing the price inside a block (and pushing it back) cannot change them. Holding a pushed price across a
+    /// block boundary leaves it open to arbitrage for a whole block.
+    function blockOpenPrice() public view returns (uint160 sqrtPriceX96, int24 tick) {
+        BlockOpen memory open = _open;
+        if (open.blockNumber == block.number) return (open.sqrtPriceX96, open.tick);
+        (sqrtPriceX96, tick,,) = poolManager.getSlot0(poolKey.toId());
     }
 
     // ------------------------------------------------------------------
@@ -422,7 +456,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     /// @dev After a withdrawal at a checkpoint: records what the sleeve now holds and shrinks the curator's baseline
     /// in proportion, so a depositor leaving is never scored as the curator's timing.
     function _rebase(uint256 sleeveId, uint256 remaining, uint256 supply) internal {
-        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(poolKey.toId());
+        (uint160 sqrtPriceX96, int24 tick) = blockOpenPrice();
         (uint256 held0, uint256 held1) = _holdings(sleeveId, sqrtPriceX96);
         Score storage score = _scores[sleeveId];
         score.held0 = held0.toUint128();
@@ -636,7 +670,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     /// @dev Brings the control index up to date, then the sleeve's score. Runs before anything that changes what a
     /// sleeve holds or how its liquidity is placed.
     function _checkpoint(uint256 sleeveId) internal {
-        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(poolKey.toId());
+        (uint160 sqrtPriceX96, int24 tick) = blockOpenPrice();
         _accrue(CONTROL_SLEEVE, sqrtPriceX96, tick);
         if (sleeveId != CONTROL_SLEEVE) _accrue(sleeveId, sqrtPriceX96, tick);
     }
@@ -678,8 +712,10 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     }
 
     /// @dev After a shape changes, records the new in-range liquidity. A curator's first shape starts its period.
+    /// What the sleeve holds is deliberately not re-recorded: tokens moved at a price that differs from the
+    /// block-open price show up at the next checkpoint as a real gain or loss, which is what they are.
     function _afterShape(uint256 sleeveId) internal {
-        (, int24 tick,,) = poolManager.getSlot0(poolKey.toId());
+        (, int24 tick) = blockOpenPrice();
         Score storage score = _scores[sleeveId];
         score.inRange = _inRangeLiquidity(sleeveId, tick);
         if (sleeveId == CONTROL_SLEEVE) {

@@ -4,9 +4,7 @@ pragma solidity 0.8.26;
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 import {IZenithBond, ZenithHook} from "./ZenithHook.sol";
 import {ZenithMath} from "./ZenithMath.sol";
@@ -19,7 +17,6 @@ import {ZenithMath} from "./ZenithMath.sol";
 /// @dev Bonds are in token1 and stay in the PoolManager as ERC-6909 claims owned by this contract.
 contract ZenithSettler is IZenithBond, IUnlockCallback {
     using CurrencySettler for Currency;
-    using StateLibrary for IPoolManager;
 
     uint256 internal constant BPS = 10_000;
 
@@ -90,11 +87,10 @@ contract ZenithSettler is IZenithBond, IUnlockCallback {
         return bond > 0 && bond * BPS >= sleeveValue(sleeveId) * BOND_BPS;
     }
 
-    /// @notice A sleeve's idle tokens and positions valued in token1 at the current pool price.
+    /// @notice A sleeve's idle tokens and positions valued in token1 at the block-open price, so a price pushed
+    /// inside the block can neither force-close a bonded sleeve nor let an under-bonded one shape.
     function sleeveValue(uint256 sleeveId) public view returns (uint256) {
-        (Currency currency0, Currency currency1, uint24 fee, int24 spacing,) = hook.poolKey();
-        PoolKey memory key = PoolKey(currency0, currency1, fee, spacing, hook);
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
+        (uint160 sqrtPriceX96,) = hook.blockOpenPrice();
         ZenithHook.Sleeve memory sleeve = hook.getSleeve(sleeveId);
         uint256 amount0 = sleeve.idle0;
         uint256 amount1 = sleeve.idle1;

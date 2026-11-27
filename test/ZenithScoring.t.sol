@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol";
 import {Vm} from "forge-std/Vm.sol";
@@ -11,6 +13,8 @@ import {ZenithTestBase} from "./utils/ZenithTestBase.sol";
 /// @notice The scoring rule's promises, on a real PoolManager: sitting still scores zero however concentrated,
 /// idle scores zero, good timing scores positive, bad timing negative, and deposits never count as skill.
 contract ZenithScoringTest is ZenithTestBase {
+    using StateLibrary for IPoolManager;
+
     /// @dev Rounding in valuation, in token1 wei. The effects measured below are around 1e17 to 1e18.
     uint256 internal constant TOLERANCE = 1e9;
 
@@ -44,7 +48,7 @@ contract ZenithScoringTest is ZenithTestBase {
     function test_staticConcentratedCuratorScoresZeroInTrend() public {
         _shape(narrow);
         vm.warp(block.timestamp + 1 days);
-        swap(key, true, -80e18, ZERO_BYTES);
+        _trade(true, -80e18);
         int256 skill = _pokeAndReadSkill();
         assertLt(skill, -1e17, "the sleeve really lost to the move");
         assertApproxEqAbs(hook.getScore(sleeve).excess, 0, TOLERANCE, "sitting still is not a mistake");
@@ -57,7 +61,7 @@ contract ZenithScoringTest is ZenithTestBase {
         vm.prank(curator);
         hook.setShape(sleeve, shape);
         _chop(20e18, 10);
-        swap(key, true, -50e18, ZERO_BYTES);
+        _trade(true, -50e18);
         hook.poke(sleeve);
         assertApproxEqAbs(hook.getScore(sleeve).excess, 0, TOLERANCE, "the control's own shape scores zero");
     }
@@ -101,10 +105,29 @@ contract ZenithScoringTest is ZenithTestBase {
         _shape(narrow / 4);
         vm.warp(block.timestamp + 1 days);
         _shape(narrow);
-        swap(key, true, -80e18, ZERO_BYTES);
+        _trade(true, -80e18);
         _shape(narrow / 4);
         hook.poke(sleeve);
         assertLt(hook.getScore(sleeve).excess, -int256(TOLERANCE), "added liquidity before the move");
+    }
+
+    // ------------------------------------------------------------------
+    // Valuation price
+    // ------------------------------------------------------------------
+
+    /// @notice Checkpoints value holdings at the price the block opened at. A swap moves that price only from the
+    /// next block, so a price pushed and pushed back inside one block never reaches a score.
+    function test_scoresUseTheBlockOpenPrice() public {
+        (uint160 open,) = hook.blockOpenPrice();
+        swap(key, true, -50e18, ZERO_BYTES);
+        (uint160 spot,,,) = manager.getSlot0(key.toId());
+        assertLt(spot, open, "the swap moved the pool");
+        (uint160 seen,) = hook.blockOpenPrice();
+        assertEq(seen, open, "same block: still the open price");
+
+        vm.roll(block.number + 1);
+        (seen,) = hook.blockOpenPrice();
+        assertEq(seen, spot, "next block: the moved price");
     }
 
     // ------------------------------------------------------------------
@@ -162,8 +185,8 @@ contract ZenithScoringTest is ZenithTestBase {
     function _chop(uint256 size, uint256 trips) internal {
         for (uint256 i; i < trips; ++i) {
             vm.warp(block.timestamp + 1 hours);
-            swap(key, true, -int256(size), ZERO_BYTES);
-            swap(key, false, -int256(size), ZERO_BYTES);
+            _trade(true, -int256(size));
+            _trade(false, -int256(size));
         }
     }
 }
