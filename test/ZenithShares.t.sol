@@ -33,8 +33,10 @@ contract ZenithSharesTest is ZenithTestBase {
         uint256 before1 = currency1.balanceOf(alice);
         vm.prank(alice);
         (uint256 second, uint128 b0, uint128 b1) = hook.fund(sleeve, 3e18, 50e18);
-        assertEq(b0, 3e18, "token0 limits the deposit");
-        assertApproxEqAbs(b1, 1e18, 1, "token1 taken at the sleeve's ratio");
+        // The maxima are padded by a few wei so per-range rounding can never charge more than offered.
+        assertLe(b0, 3e18, "never more than offered");
+        assertApproxEqAbs(b0, 3e18, 2, "token0 limits the deposit");
+        assertApproxEqAbs(b1, 1e18, 2, "token1 taken at the sleeve's ratio");
         assertEq(before1 - currency1.balanceOf(alice), b1, "only what was used was pulled");
         assertApproxEqRel(second, first / 10, 1e12, "a tenth of the holdings, a tenth of the shares");
         _assertLedgerEqualsClaims();
@@ -114,6 +116,69 @@ contract ZenithSharesTest is ZenithTestBase {
         hook.poke(sleeve);
         // The curator never changed its shape, so depositors coming and going must not create skill or blame.
         assertApproxEqAbs(hook.getScore(sleeve).excess, before, 1e9, "flows are not timing");
+    }
+
+    /// @notice A later deposit buys into the positions, not just the idle balance: every range grows by the
+    /// deposit's fraction, so the new money earns fees from the moment it arrives and takes none it did not earn.
+    function test_depositAddsTheSameFractionToEveryPosition() public {
+        vm.prank(alice);
+        (uint256 shares,,) = hook.fund(sleeve, 100e18, 100e18);
+        ZenithHook.Range[] memory shape = new ZenithHook.Range[](2);
+        shape[0] = _range(-600, 600, 600e18);
+        shape[1] = _range(-1200, -600, 100e18);
+        vm.prank(curator);
+        hook.setShape(sleeve, shape);
+        ZenithHook.Sleeve memory s = hook.getSleeve(sleeve);
+
+        vm.prank(alice);
+        (uint256 added,,) = hook.fund(sleeve, 10e18, 10e18);
+
+        assertApproxEqRel(added, shares / 10, 1e15, "about a tenth more shares");
+        uint256 supply = hook.totalShares(sleeve);
+        ZenithHook.Range[] memory ranges = hook.getRanges(sleeve);
+        for (uint256 i; i < 2; ++i) {
+            assertEq(ranges[i].liquidity, shape[i].liquidity + shape[i].liquidity * added / shares, "range grew");
+            assertApproxEqRel(uint256(ranges[i].liquidity) * shares, uint256(shape[i].liquidity) * supply, 1e9);
+        }
+        assertApproxEqRel(hook.getSleeve(sleeve).idle0, uint256(s.idle0) * supply / shares, 1e9, "idle grew too");
+        _assertRangesMatchPool(sleeve);
+        _assertLedgerEqualsClaims();
+    }
+
+    /// @notice Whatever the shape, price and offer, a deposit never charges more than offered, keeps the ledger
+    /// whole, and an immediate round trip returns no more than was paid.
+    function testFuzz_depositIntoPositionsIsBoundedAndRoundTripsSafely(
+        uint256 shapeSeed,
+        uint256 offer0,
+        uint256 offer1,
+        bool moved
+    ) public {
+        vm.prank(alice);
+        hook.fund(sleeve, 100e18, 100e18);
+        ZenithHook.Range[] memory shape = _randomShape(shapeSeed);
+        vm.prank(curator);
+        try hook.setShape(sleeve, shape) {} catch {}
+        if (moved) _trade(shapeSeed % 2 == 0, -int256(bound(shapeSeed >> 8, 1e15, 30e18)));
+
+        uint128 max0 = uint128(bound(offer0, 0, 300e18));
+        uint128 max1 = uint128(bound(offer1, 0, 300e18));
+        address bob = makeAddr("bob");
+        _give(bob, 1000e18);
+        vm.prank(bob);
+        try hook.fund(sleeve, max0, max1) returns (uint256 shares, uint128 paid0, uint128 paid1) {
+            assertLe(paid0, max0, "never more token0 than offered");
+            assertLe(paid1, max1, "never more token1 than offered");
+            _assertRangesMatchPool(sleeve);
+            _assertLedgerEqualsClaims();
+
+            vm.prank(bob);
+            (uint256 out0, uint256 out1) = hook.withdraw(sleeve, shares, bob);
+            assertLe(out0, paid0, "no token0 gained by a round trip");
+            assertLe(out1, paid1, "no token1 gained by a round trip");
+            _assertLedgerEqualsClaims();
+        } catch (bytes memory reason) {
+            assertEq(bytes4(reason), ZenithHook.ZeroDeposit.selector, "only an empty deposit may fail");
+        }
     }
 
     function _shape(int24 lower, int24 upper, uint128 liquidity) internal {

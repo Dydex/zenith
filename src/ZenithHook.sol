@@ -160,6 +160,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     error InsufficientIdle();
     error PeriodNotOver();
     error ZeroDeposit();
+    error DepositExceedsMax();
     error InsufficientShares();
     error NotSettler();
     error SettlerAlreadySet();
@@ -403,47 +404,72 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         internal
         returns (bytes memory)
     {
-        PoolKey memory key = poolKey;
-        Score storage score = _scores[sleeveId];
         uint256 supply = totalShares[sleeveId];
-        uint256 shares;
-        uint128 amount0;
-        uint128 amount1;
-        if (supply == 0) {
-            // The first deposit sets the ratio. Shares start at its value in token1.
-            (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
-            (shares, amount0, amount1) = (_value(amount0Max, amount1Max, sqrtPriceX96), amount0Max, amount1Max);
-        } else {
-            uint256 used0;
-            uint256 used1;
-            (shares, used0, used1) = ZenithMath.proportional(supply, score.held0, score.held1, amount0Max, amount1Max);
-            (amount0, amount1) = (used0.toUint128(), used1.toUint128());
-        }
+        (uint256 shares, uint256 idle0, uint256 idle1, uint256 amount0, uint256 amount1) =
+            _buyIn(sleeveId, supply, amount0Max, amount1Max);
         if (shares == 0) revert ZeroDeposit();
 
-        // Pay the tokens in from the funder, then take the same amount back as claims for the hook.
+        // The funder pays for the idle part and the added liquidity; the idle part is kept as claims.
+        PoolKey memory key = poolKey;
         key.currency0.settle(poolManager, funder, amount0, false);
-        key.currency0.take(poolManager, address(this), amount0, true);
+        key.currency0.take(poolManager, address(this), idle0, true);
         key.currency1.settle(poolManager, funder, amount1, false);
-        key.currency1.take(poolManager, address(this), amount1, true);
-
+        key.currency1.take(poolManager, address(this), idle1, true);
         Sleeve storage sleeve = _sleeves[sleeveId];
-        sleeve.idle0 += amount0;
-        sleeve.idle1 += amount1;
-        // New money is added after the checkpoint, so it never counts as skill. It lands idle and leaves the
-        // curator's baseline alone; deploying it is the curator's decision and is scored like any other.
-        score.held0 += amount0;
-        score.held1 += amount1;
+        sleeve.idle0 += idle0.toUint128();
+        sleeve.idle1 += idle1.toUint128();
+
         totalShares[sleeveId] = supply + shares;
         sharesOf[sleeveId][funder] += shares;
+        // New money is added after the checkpoint and the baseline grows with it, so it is never counted as skill.
+        _rebase(sleeveId, supply + shares, supply);
         emit SleeveFunded(sleeveId, funder, amount0, amount1, shares);
         return abi.encode(shares, amount0, amount1);
+    }
+
+    /// @dev Sizes a deposit and adds its liquidity. Later deposits buy the same fraction of everything the sleeve
+    /// holds: idle tokens and every position. Adding the liquidity, not just idle tokens, means a deposit cannot
+    /// take a share of fees its money did not earn.
+    function _buyIn(uint256 sleeveId, uint256 supply, uint256 max0, uint256 max1)
+        internal
+        returns (uint256 shares, uint256 idle0, uint256 idle1, uint256 amount0, uint256 amount1)
+    {
+        shares = _sharesFor(sleeveId, supply, max0, max1);
+        if (supply == 0) return (shares, max0, max1, max0, max1);
+        if (shares == 0) return (0, 0, 0, 0, 0);
+        Sleeve storage sleeve = _sleeves[sleeveId];
+        idle0 = FullMath.mulDivRoundingUp(sleeve.idle0, shares, supply);
+        idle1 = FullMath.mulDivRoundingUp(sleeve.idle1, shares, supply);
+        (int256 net0, int256 net1) = _scaleRanges(sleeveId, shares, supply, true);
+        amount0 = idle0 + (-net0).toUint256();
+        amount1 = idle1 + (-net1).toUint256();
+        if (amount0 > max0 || amount1 > max1) revert DepositExceedsMax();
+    }
+
+    /// @dev The first deposit sets the ratio and its shares start at its value in token1. Later ones get shares in
+    /// proportion to the sleeve's holdings at the current price. Position amounts are rounded down, so each is
+    /// counted 1 wei higher, and adding liquidity rounds up by at most 2 wei per range, so the maxima are padded by
+    /// that much. Together they keep the charge within what was offered; _buyIn still checks it.
+    function _sharesFor(uint256 sleeveId, uint256 supply, uint256 max0, uint256 max1) internal view returns (uint256) {
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
+        if (supply == 0) return _value(max0, max1, sqrtPriceX96);
+        (uint256 held0, uint256 held1) = _holdings(sleeveId, sqrtPriceX96);
+        uint256 n = _ranges[sleeveId].length;
+        uint256 pad = 2 * n + 1;
+        (uint256 shares,,) = ZenithMath.proportional(
+            supply,
+            held0 > 0 ? held0 + n : 0,
+            held1 > 0 ? held1 + n : 0,
+            max0 > pad ? max0 - pad : 0,
+            max1 > pad ? max1 - pad : 0
+        );
+        return shares;
     }
 
     /// @dev Removes the owner's fraction of every position, adds the same fraction of idle tokens and sends both.
     function _withdraw(address owner, uint256 sleeveId, uint256 shares, address to) internal returns (bytes memory) {
         uint256 supply = totalShares[sleeveId];
-        (int256 net0, int256 net1) = _removeFraction(sleeveId, shares, supply);
+        (int256 net0, int256 net1) = _scaleRanges(sleeveId, shares, supply, false);
         (uint256 amount0, uint256 amount1) = _payOut(sleeveId, shares, supply, net0, net1, to);
 
         totalShares[sleeveId] = supply - shares;
@@ -453,20 +479,20 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         return abi.encode(amount0, amount1);
     }
 
-    /// @dev After a withdrawal at a checkpoint: records what the sleeve now holds and shrinks the curator's baseline
-    /// in proportion, so a depositor leaving is never scored as the curator's timing.
-    function _rebase(uint256 sleeveId, uint256 remaining, uint256 supply) internal {
+    /// @dev After a deposit or withdrawal at a checkpoint: records what the sleeve now holds and scales the curator's
+    /// baseline with the supply, so depositors arriving or leaving are never scored as the curator's timing.
+    function _rebase(uint256 sleeveId, uint256 newSupply, uint256 oldSupply) internal {
         (uint160 sqrtPriceX96, int24 tick) = blockOpenPrice();
         (uint256 held0, uint256 held1) = _holdings(sleeveId, sqrtPriceX96);
         Score storage score = _scores[sleeveId];
         score.held0 = held0.toUint128();
         score.held1 = held1.toUint128();
-        score.startInRange = FullMath.mulDiv(score.startInRange, remaining, supply).toUint128();
+        if (oldSupply > 0) score.startInRange = FullMath.mulDiv(score.startInRange, newSupply, oldSupply).toUint128();
         score.inRange = _inRangeLiquidity(sleeveId, tick);
     }
 
-    /// @dev Takes shares/supply of each position's liquidity out of the pool, dropping ranges that reach zero.
-    function _removeFraction(uint256 sleeveId, uint256 shares, uint256 supply)
+    /// @dev Adds or removes shares/supply of each position's liquidity, dropping ranges that reach zero.
+    function _scaleRanges(uint256 sleeveId, uint256 shares, uint256 supply, bool add)
         internal
         returns (int256 net0, int256 net1)
     {
@@ -475,24 +501,28 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         Range[] storage ranges = _ranges[sleeveId];
         for (uint256 i = ranges.length; i > 0; --i) {
             Range storage r = ranges[i - 1];
-            uint128 removed = FullMath.mulDiv(r.liquidity, shares, supply).toUint128();
-            if (removed == 0) continue;
+            uint128 change = FullMath.mulDiv(r.liquidity, shares, supply).toUint128();
+            if (change == 0) continue;
             (BalanceDelta delta,) = poolManager.modifyLiquidity(
                 key,
                 ModifyLiquidityParams({
                     tickLower: r.tickLower,
                     tickUpper: r.tickUpper,
-                    liquidityDelta: -uint256(removed).toInt256(),
+                    liquidityDelta: add ? uint256(change).toInt256() : -uint256(change).toInt256(),
                     salt: salt
                 }),
                 ""
             );
             net0 += delta.amount0();
             net1 += delta.amount1();
-            r.liquidity -= removed;
-            if (r.liquidity == 0) {
-                ranges[i - 1] = ranges[ranges.length - 1];
-                ranges.pop();
+            if (add) {
+                r.liquidity += change;
+            } else {
+                r.liquidity -= change;
+                if (r.liquidity == 0) {
+                    ranges[i - 1] = ranges[ranges.length - 1];
+                    ranges.pop();
+                }
             }
         }
     }
