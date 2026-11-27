@@ -10,7 +10,7 @@ Two of these were real holes in the code as it stood on Nov 26: the deposit sand
 |---|---|
 | Curator | Its sleeve's shape, its own trades in the pool, when it acts within a period |
 | Depositor | When it deposits and withdraws, and how much |
-| Anyone | Swaps, donations, calling `poke`, `settle`, `release` and `forceClose` |
+| Anyone | Swaps, donations, calling `poke`, `settle`, `release`, `forceClose` and the keeper's `sweep`; deploying reactive contracts that target the keeper |
 
 Curators never hold depositors' funds: the hook executes shapes in the sleeve's own positions, and an invariant test checks that no tokens or claims ever reach a curator.
 
@@ -86,4 +86,5 @@ A fuzz test (`testFuzz_depositIntoPositionsIsBoundedAndRoundTripsSafely`, 10,000
 
 - **A price held across a block.** The clamp makes in-block pushes free of effect, not multi-block ones. A push that survives a block is exposed to arbitrage for that block. On a chain with private ordering, a well-funded attacker could still try it, and the attack tests show the size of the prize.
 - **Leaving before a settlement.** A depositor who withdraws before settlement neither pays its share of that period's curator fee nor receives its share of a slash. Funds handle this with fee equalisation; Zenith does not yet.
+- **Draining the keeper's ETH.** Reactive bills a callback to its recipient even when the recipient rejects it. Anyone can deploy a reactive contract that requests callbacks to `ZenithKeeper`: the keeper refuses them, but each still costs it gas, and a keeper in debt receives nothing. This stops the automation, not Zenith. Settlement, release and forced close stay public functions anyone can call, and topping up the keeper and calling `coverDebt` restores it.
 - **One pool per hook, token1 bonds and a fixed 7-day period** are design choices for the hookathon, not limits of the method.
