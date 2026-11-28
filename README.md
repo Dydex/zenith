@@ -43,7 +43,7 @@ Three findings shaped Zenith:
 
 ### Can skill be measured well enough to pay on?
 
-Measured from outside, as in the study, not reliably. Our own data shows it. Skill kept its sign into the next quarter in only 8 of 15 vault-quarters, and shifting the weekly grid by a few days changes how many vaults look skilled from 1 to 3. Another UHI-11 hook, [Charter](https://github.com/RaymondAbiola/charter), reached the same conclusion from its own study and chose to charge managers a passive benchmark instead of scoring them.
+Measured from outside, as in the study, not reliably. Our own data shows it. Skill kept its sign into the next quarter in only 8 of 15 vault-quarters, and shifting the weekly grid by a few days changes how many vaults look skilled from 1 to 3.
 
 The study also shows why. Token-mix changes inside a sampling interval, from deposits or rebalances, leak price exposure into the measured skill. Zenith removes each cause:
 
@@ -323,8 +323,9 @@ The reactive contract comes before the keeper because the keeper must know its a
 
 | Design | How it differs |
 | --- | --- |
-| Managed vaults (Charm/Alpha, Arrakis/Gelato, Visor and others) | Depositors are judged on total return and operators take a cut of fees regardless. The study above measures both. In Zenith the curator is paid only on excess skill and pays from a bond when it falls behind. |
-| [Charter](https://github.com/RaymondAbiola/charter) (UHI-11) | Concludes, from its own vault study, that skill cannot be measured reliably enough to pay on, so a manager owes depositors a passive benchmark plus rent and carries the price risk of its range. Zenith agrees that skill measured from outside is unreliable, and changes the measurement instead: a twin in the same pool, holdings at every checkpoint, and pay that is symmetric. Depositors keep the pool's price exposure; the curator is accountable only for how it times liquidity. |
+| Managed vaults on Uniswap v3 (Arrakis/G-UNI, Charm Alpha Vaults, Gamma/Visor) | A manager or a fixed strategy rebalances pooled capital, depositors are judged on total return, and the operator or protocol takes a cut of fees regardless of the result. The study above measures both. In Zenith the curator never holds the capital, is paid only on excess skill against a passive twin, and pays from a bond when it falls behind. |
+| Bunni v2 (Uniswap v4 hook) | Liquidity is shaped automatically by a liquidity density function and rebalanced by rules, not by a person. Nobody is paid for judgement, so there is nothing to score. Zenith is for the opposite case: a human curator making discretionary calls, paid only if they work. |
+| Auction-managed AMMs ([Adams, Moallemi, Reynolds and Robinson, 2024](https://arxiv.org/abs/2403.03367)) | Managers bid rent for the right to manage a pool, so pay is set by competition up front. Zenith pays after the fact, on measured excess against a twin, and takes from a bond when the result is negative. |
 
 ## Repository
 
