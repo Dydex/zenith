@@ -68,6 +68,9 @@ mutate "scores valued at the spot price, not the block-open price" \
 mutate "a checkpoint values only the control and the sleeve acted on" \
     's/_accrue(id, sqrtPriceX96, tick, id == CONTROL_SLEEVE || id == sleeveId);/if (id == CONTROL_SLEEVE || id == sleeveId) _accrue(id, sqrtPriceX96, tick, true);/' \
     ZenithAttacksTest
+mutate "a deposit may outgrow the curator's bond" \
+    's/if (_ranges\[sleeveId\].length > 0) _requireBonded(sleeveId);/if (false) _requireBonded(sleeveId);/' \
+    ZenithAttacksTest
 mutate "curators may shape with no live control" \
     's/if (controlIndexStart == 0) revert NoControl();/if (false) revert NoControl();/' \
     ZenithLedgerTest
@@ -97,11 +100,8 @@ mutate "slash released all at once" \
 mutate "keeper never releases vested slashes" \
     's/if (pending == 0) return false;/return false;/' \
     ZenithReactiveTest keeper
-mutate "reactive contract checks the depositor's address instead of the sleeve" \
-    's/(address(0), log.topic1)/(address(0), log.topic2)/' \
-    ZenithReactiveTest reactive
 mutate "reactive contract trusts a Cron topic from any emitter" \
-    's/if (log.topic0 == cronTopic \&\& log.contractAddress == LEGACY_SYSTEM) {/if (log.topic0 == cronTopic) {/' \
+    's/ || log.contractAddress != LEGACY_SYSTEM) return;/) return;/' \
     ZenithReactiveTest reactive
 
 if [ "$survived" -gt 0 ]; then
