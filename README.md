@@ -163,31 +163,31 @@ The hook has 262 bytes to spare, which is why new features go into the settler a
 
 Our first Reactive contract was built on Reactive's legacy library. It deployed and verified, but Lasna never counted its subscriptions and it never reacted: Reactive had moved to Reactive Omni, with a new system contract, `react` called directly, and callbacks requested from the system contract. We rebuilt the keeper and reactive contract on [`reactive-lib-omni`](https://github.com/Reactive-Network/reactive-lib-omni), which needs Solidity 0.8.29 or later, while the deployed hook stays on 0.8.26. The two meet through ABI-identical interfaces ([`src/interfaces/IZenith.sol`](src/interfaces/IZenith.sol)), and the tests deploy the new contracts from their compiled artifacts.
 
-The keeper accepts a callback only from Reactive's callback proxy, and only when the proxy reports that our own reactive contract asked for it. One failing sleeve never blocks the others, and a sweep that runs low on gas stops before a sleeve it might not finish and resumes there on the next tick. The worst case for one sleeve (four ranges, settled, slashed and force-closed in one visit) costs about 693,000 gas in a fresh transaction, inside the keeper's allowance of 1,000,000 per sleeve.
+The keeper accepts a callback only from Reactive's callback proxy, and only when the proxy reports that our own reactive contract asked for it. One failing sleeve never blocks the others, and a sweep that runs low on gas stops before a sleeve it might not finish and resumes there on the next tick. The worst case for one sleeve (four ranges, settled, slashed and force-closed in one visit) costs about 794,000 gas in a fresh transaction, inside the keeper's allowance of 1,000,000 per sleeve.
 
 ---
 
 ## Gas
 
-Measured by [`test/ZenithGas.t.sol`](test/ZenithGas.t.sol) through the test router, with every contract the call touches cooled first, as in a fresh transaction. The figures exclude the 21,000 base cost. The hookless pool has the same tokens, fee and liquidity, and every case starts from the same state.
+Measured by [`test/ZenithGas.t.sol`](test/ZenithGas.t.sol) with Foundry 1.10.1, the version CI pins, through the test router. Every contract the call touches is cooled first, as in a fresh transaction, and the figures exclude the 21,000 base cost. The hookless pool has the same tokens, fee and liquidity, and every case starts from the same state.
 
 | Swap | Gas | Over a hookless pool |
 | --- | --: | --: |
-| Hookless pool | 101,401 | |
-| Zenith, first swap of the block | 113,451 | +12,050 |
-| Hookless pool, later swap | 91,368 | |
-| Zenith, later swap in the block | 95,823 | +4,455 |
+| Hookless pool, first swap | 124,961 | |
+| Zenith, first swap of the block | 137,059 | +12,098 |
+| Hookless pool, later swap | 124,928 | |
+| Zenith, any later swap in the block | 131,931 | +7,003 |
 
-The hook writes one slot per block, to record the opening price, and reads it on every other swap. Swaps never touch sleeves, scores or bonds; that work happens when curators, depositors and the keeper act.
+The first swap of each block writes one slot, the block's opening price; every later swap only reads it. Swaps never touch sleeves, scores or bonds; that work happens when curators, depositors and the keeper act.
 
 | Operation | Gas |
 | --- | --: |
-| `fund`, one-range sleeve | 490,996 |
-| `withdraw` a tenth, one-range sleeve | 256,654 |
-| `setShape`, one range to four | 744,411 |
-| `poke`, one range | 140,570 |
-| `poke`, four ranges | 247,212 |
-| `settle`, four ranges | 546,095 |
+| `fund`, one-range sleeve | 512,600 |
+| `withdraw` a tenth, one-range sleeve | 297,462 |
+| `setShape`, one range to four | 778,971 |
+| `poke`, one range | 171,274 |
+| `poke`, four ranges | 277,916 |
+| `settle`, four ranges | 581,787 |
 
 Every operation checkpoints the control as well as the sleeve, which is most of its cost.
 
@@ -196,7 +196,7 @@ Every operation checkpoints the control as well as the sleeve, which is most of 
 ## Security and testing
 
 ```bash
-forge test                                        # 91 tests
+forge test                                        # 91 tests; Foundry 1.10 reports the 6 invariants as one campaign
 forge test --match-contract ZenithGasTest -vv     # the gas tables above
 forge test --match-contract ZenithAttacksTest -vv # the attack numbers above
 script/mutation.sh                                # plants 14 bugs, expects every one caught
@@ -212,6 +212,7 @@ script/mutation.sh                                # plants 14 bugs, expects ever
 - **Twin positions:** every sleeve and the control earn exactly what a standalone v4 position with the same range and liquidity earns, to the wei, fuzzed over random swaps ([`test/ZenithTwinFees.t.sol`](test/ZenithTwinFees.t.sol)).
 - **Attacks:** the six above, plus the scoring tests for every no-skill strategy.
 - **Mutation check:** [`script/mutation.sh`](script/mutation.sh) plants 14 bugs one at a time, such as a shared position salt, a one-wei fee skim, scoring against current liquidity, spot-price valuation, idle-only deposits, a high-water mark that never advances, a slash kept by the settler, and a reactive contract that trusts a lookalike Cron event. The tests catch all 14.
+- **Coverage:** 97.3% of lines, 96.4% of statements, 97.1% of functions and 79.7% of branches across `src/` (`forge coverage --ir-minimum --report summary --no-match-coverage "(^test|^script|^lib/)"`).
 - **No admin.** The hook has no owner, no upgrade path and no pause, and every parameter is a constant. The initializer can bind one pool and set the settler once; the reactive contract's deployer can name its keeper once.
 
 Identity never comes from a hook callback's `sender`, which is the router. Deposits, shapes and bonds go through Zenith's own entry points and use `msg.sender`.
