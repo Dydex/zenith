@@ -41,7 +41,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     uint256 public constant CONTROL_SLEEVE = 0;
 
     /// @notice Maximum number of sleeves, including the control. Kept small so per-swap scoring stays affordable.
-    uint256 public constant MAX_SLEEVES = 8;
+    uint256 public constant MAX_SLEEVES = 4;
 
     /// @notice Maximum number of price ranges in one sleeve's shape.
     uint256 public constant MAX_RANGES = 4;
@@ -713,16 +713,21 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     // Internal: scoring
     // ------------------------------------------------------------------
 
-    /// @dev Brings the control index up to date, then the sleeve's score. Runs before anything that changes what a
-    /// sleeve holds or how its liquidity is placed.
+    /// @dev Values every sleeve at the block-open price, the control first. Each curator is therefore compared with
+    /// the control over exactly the same intervals: a checkpoint that only the control took would let a price
+    /// excursion count against the control and not against the curator. Only the control and the sleeve being acted
+    /// on collect their fees; another sleeve's fees count when that sleeve next collects them. Runs before anything
+    /// that changes what a sleeve holds or how its liquidity is placed.
     function _checkpoint(uint256 sleeveId) internal {
         (uint160 sqrtPriceX96, int24 tick) = blockOpenPrice();
-        _accrue(CONTROL_SLEEVE, sqrtPriceX96, tick);
-        if (sleeveId != CONTROL_SLEEVE) _accrue(sleeveId, sqrtPriceX96, tick);
+        uint256 count = sleeveCount;
+        for (uint256 id; id < count; ++id) {
+            _accrue(id, sqrtPriceX96, tick, id == CONTROL_SLEEVE || id == sleeveId);
+        }
     }
 
-    function _accrue(uint256 sleeveId, uint160 sqrtPriceX96, int24 tick) internal {
-        _poke(sleeveId);
+    function _accrue(uint256 sleeveId, uint160 sqrtPriceX96, int24 tick, bool collect) internal {
+        if (collect) _poke(sleeveId);
         Score storage score = _scores[sleeveId];
         (uint256 held0, uint256 held1) = _holdings(sleeveId, sqrtPriceX96);
 

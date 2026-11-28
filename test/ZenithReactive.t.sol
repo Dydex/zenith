@@ -230,6 +230,32 @@ contract ZenithReactiveTest is ZenithTestBase {
         assertLt(used, keeper.GAS_PER_SLEEVE(), "fits the allowance");
     }
 
+    /// @notice The same worst case in a full pool, every curator sleeve with four ranges, because every checkpoint
+    /// values every sleeve. Measured with `--isolate` for cold storage.
+    function test_worstCaseSleeveInAFullPoolFitsTheGasAllowance() public {
+        _bond(sleeve, 10.2e18);
+        _fourRanges(narrow / 48);
+        for (uint256 i = 2; i < hook.MAX_SLEEVES(); ++i) {
+            uint256 id = _openFundedSleeve(curator, 100e18, 100e18);
+            _bond(id, 20e18);
+            _fourRangesOn(id, narrow / 48);
+        }
+        assertEq(hook.sleeveCount(), hook.MAX_SLEEVES(), "a full pool");
+        vm.warp(block.timestamp + 1 days);
+        _fourRanges(narrow / 12);
+        _trade(true, -80e18);
+        _fourRanges(narrow / 48);
+        hook.fund(sleeve, 100e18, 100e18);
+        vm.warp(block.timestamp + 6 days); // only the first curator's period is due
+
+        uint256 before = gasleft();
+        keeper.sweep();
+        uint256 used = before - gasleft();
+        assertEq(hook.getRanges(sleeve).length, 0, "settled, slashed and force-closed");
+        emit log_named_uint("gas for the worst-case sleeve in a full pool", used);
+        assertLt(used, keeper.GAS_PER_SLEEVE(), "fits the allowance");
+    }
+
     // ------------------------------------------------------------------
     // Reactive contract
     // ------------------------------------------------------------------
@@ -368,13 +394,17 @@ contract ZenithReactiveTest is ZenithTestBase {
     }
 
     function _fourRanges(uint128 liquidity) internal {
+        _fourRangesOn(sleeve, liquidity);
+    }
+
+    function _fourRangesOn(uint256 id, uint128 liquidity) internal {
         ZenithHook.Range[] memory shape = new ZenithHook.Range[](4);
         shape[0] = _range(-600, 600, liquidity);
         shape[1] = _range(-1200, 1200, liquidity);
         shape[2] = _range(-1800, 1800, liquidity);
         shape[3] = _range(-2400, 2400, liquidity);
         vm.prank(curator);
-        hook.setShape(sleeve, shape);
+        hook.setShape(id, shape);
     }
 
     function _openBondedShapedSleeve() internal returns (uint256 id) {

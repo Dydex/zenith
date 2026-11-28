@@ -338,6 +338,40 @@ contract ZenithAttacksTest is ZenithTestBase {
         return total * hook.sharesOf(sleeve, address(this)) / hook.totalShares(sleeve);
     }
 
+    /// @notice Attack: anyone can poke the control. A curator who pokes it at the far end of a price excursion gives
+    /// the control a checkpoint its own sleeve did not get, and the excursion then counted against the control and
+    /// not against the curator: a static curator scored +1.18 tokens for one excursion. Every checkpoint now values
+    /// every sleeve, so each curator is compared with the control over exactly the same intervals. What is left
+    /// comes from fees, which the control collects at every checkpoint and another sleeve only at its own.
+    function test_pokingTheControlMidExcursionPaysNothing() public {
+        _bond(20e18);
+        _shape(narrow);
+        vm.roll(block.number + 1);
+        (uint160 start,,,) = manager.getSlot0(key.toId());
+        uint256 snap = vm.snapshotState();
+
+        _excursion(start, false);
+        int256 quiet = hook.getScore(sleeve).excess;
+
+        vm.revertToState(snap);
+        _excursion(start, true);
+        int256 poked = hook.getScore(sleeve).excess;
+
+        console2.log("static curator's excess, nobody pokes  ", quiet);
+        console2.log("static curator's excess, control poked ", poked);
+        int256 moved = poked > quiet ? poked - quiet : quiet - poked;
+        assertLt(moved, 0.01e18, "under 1% of the 1.18 tokens one excursion used to be worth");
+    }
+
+    function _excursion(uint160 start, bool pokeControl) internal {
+        _swapAs(attacker, true, 60e18);
+        vm.roll(block.number + 1);
+        if (pokeControl) hook.poke(hook.CONTROL_SLEEVE());
+        _swapToPrice(attacker, start);
+        vm.roll(block.number + 1);
+        hook.poke(sleeve);
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------

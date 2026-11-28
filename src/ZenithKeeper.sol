@@ -18,7 +18,7 @@ import {IZenithHook, IZenithSettler} from "./interfaces/IZenith.sol";
 contract ZenithKeeper is AbstractCallback {
     /// @notice Gas kept back for one sleeve's settlement. A sweep stops before a sleeve it might not finish and
     /// resumes from that sleeve on the next tick, so no sleeve is starved by the ones before it.
-    uint256 public constant GAS_PER_SLEEVE = 1_000_000;
+    uint256 public constant GAS_PER_SLEEVE = 2_500_000;
 
     IZenithHook public immutable hook;
     IZenithSettler public immutable settler;
