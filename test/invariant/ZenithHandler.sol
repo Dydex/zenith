@@ -49,6 +49,12 @@ contract ZenithHandler is Test {
         token0.approve(address(_swapRouter), type(uint256).max);
         token1.approve(address(_swapRouter), type(uint256).max);
 
+        // Curators can only shape against a live control.
+        token0.mint(address(this), 10e18);
+        token1.mint(address(this), 10e18);
+        _hook.fund(_hook.CONTROL_SLEEVE(), 10e18, 10e18);
+        _hook.deployControl();
+
         for (uint256 i; i < CURATOR_COUNT; ++i) {
             curators[i] = makeAddr(string(abi.encode("invariant-curator", i)));
             curatorSleeves[i] = _hook.openSleeve(curators[i]);

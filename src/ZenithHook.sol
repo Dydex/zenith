@@ -171,6 +171,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     error NotBonded();
     error UnbackedCredit();
     error PriceMoved();
+    error NoControl();
 
     constructor(IPoolManager _poolManager, address _initializer) BaseHook(_poolManager) {
         if (_initializer == address(0)) revert ZeroInitializer();
@@ -288,6 +289,8 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         Sleeve storage sleeve = _sleeves[sleeveId];
         if (!sleeve.exists) revert UnknownSleeve();
         if (msg.sender != sleeve.curator) revert NotCurator();
+        // Without a live control there is no benchmark, and a curator's raw result would count as skill.
+        if (controlIndexStart == 0) revert NoControl();
         if (settler != address(0) && !IZenithBond(settler).isBonded(sleeveId)) revert NotBonded();
         _validateShape(ranges);
         poolManager.unlock(abi.encode(Action.SetShape, abi.encode(sleeveId, ranges)));

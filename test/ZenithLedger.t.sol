@@ -69,6 +69,20 @@ contract ZenithLedgerTest is ZenithTestBase {
         hook.openSleeve(makeAddr("one-too-many"));
     }
 
+    /// @notice Without a live control there is no benchmark, so no curator may shape.
+    function test_shapingNeedsALiveControl() public {
+        uint256 id = _openFundedSleeve(address(this), 10e18, 10e18);
+        ZenithHook.Range[] memory shape = new ZenithHook.Range[](1);
+        shape[0] = _range(-600, 600, 1e18);
+        vm.expectRevert(ZenithHook.NoControl.selector);
+        hook.setShape(id, shape);
+
+        hook.fund(hook.CONTROL_SLEEVE(), 10e18, 10e18);
+        hook.deployControl();
+        hook.setShape(id, shape);
+        assertEq(hook.getRanges(id).length, 1);
+    }
+
     function test_revertsWhenFundingUnknownSleeve() public {
         vm.expectRevert(ZenithHook.UnknownSleeve.selector);
         hook.fund(7, 1, 1);

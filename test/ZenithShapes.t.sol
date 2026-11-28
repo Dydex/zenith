@@ -13,6 +13,8 @@ contract ZenithShapesTest is ZenithTestBase {
     function setUp() public override {
         super.setUp();
         _addExternalLiquidity(-6000, 6000, 1000e18);
+        hook.fund(hook.CONTROL_SLEEVE(), 10e18, 10e18); // curators can only shape against a live control
+        hook.deployControl();
         sleeve = _openFundedSleeve(curator, 100e18, 100e18);
     }
 
