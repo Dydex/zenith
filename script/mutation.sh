@@ -83,10 +83,10 @@ mutate "keeper never releases vested slashes" \
     's/if (pending == 0) return false;/return false;/' \
     ZenithReactiveTest keeper
 mutate "reactive contract checks the depositor's address instead of the sleeve" \
-    's/(address(0), log.topic_1)/(address(0), log.topic_2)/' \
+    's/(address(0), log.topic1)/(address(0), log.topic2)/' \
     ZenithReactiveTest reactive
 mutate "reactive contract trusts a Cron topic from any emitter" \
-    's/if (log.topic_0 == cronTopic \&\& log._contract == address(service)) {/if (log.topic_0 == cronTopic) {/' \
+    's/if (log.topic0 == cronTopic \&\& log.contractAddress == LEGACY_SYSTEM) {/if (log.topic0 == cronTopic) {/' \
     ZenithReactiveTest reactive
 
 if [ "$survived" -gt 0 ]; then

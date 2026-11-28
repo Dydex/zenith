@@ -23,3 +23,4 @@ __pycache__/
 # Local node deployments are throwaway
 deployments/31337.json
 deployments/reactive-31337.json
+deployments/keeper-31337.json
