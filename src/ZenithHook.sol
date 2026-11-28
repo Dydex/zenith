@@ -227,6 +227,11 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         (sqrtPriceX96, tick,,) = poolManager.getSlot0(poolKey.toId());
     }
 
+    /// @dev Once a settler is set, a managed sleeve's curator must hold a bond that covers it.
+    function _requireBonded(uint256 sleeveId) internal view {
+        if (settler != address(0) && !IZenithBond(settler).isBonded(sleeveId)) revert NotBonded();
+    }
+
     /// @dev Reverts if the price has moved more than MAX_PRICE_MOVE ticks from the block's opening price. Removing
     /// liquidity is never restricted: liquidity that leaves at a pushed price has already sold high.
     function _requireSteadyPrice() internal view {
@@ -291,7 +296,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         if (msg.sender != sleeve.curator) revert NotCurator();
         // Without a live control there is no benchmark, and a curator's raw result would count as skill.
         if (controlIndexStart == 0) revert NoControl();
-        if (settler != address(0) && !IZenithBond(settler).isBonded(sleeveId)) revert NotBonded();
+        _requireBonded(sleeveId);
         _validateShape(ranges);
         poolManager.unlock(abi.encode(Action.SetShape, abi.encode(sleeveId, ranges)));
     }
@@ -440,6 +445,9 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         sharesOf[sleeveId][funder] += shares;
         // New money is added after the checkpoint and the baseline grows with it, so it is never counted as skill.
         _rebase(sleeveId, supply + shares, supply);
+        // A deposit may not outgrow the curator's bond: otherwise one large deposit would make any managed sleeve
+        // look under-bonded, and anyone could then force-close it. The curator decides how big its sleeve can get.
+        if (_ranges[sleeveId].length > 0) _requireBonded(sleeveId);
         emit SleeveFunded(sleeveId, funder, amount0, amount1, shares);
         return abi.encode(shares, amount0, amount1);
     }

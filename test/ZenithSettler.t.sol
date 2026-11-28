@@ -212,8 +212,9 @@ contract ZenithSettlerTest is ZenithTestBase {
         vm.expectRevert(ZenithSettler.StillBonded.selector);
         settler.forceClose(sleeve);
 
-        // A large deposit makes the same bond too small for the sleeve.
-        hook.fund(sleeve, 100e18, 100e18);
+        // token0 doubles against token1, so the same bond no longer covers the sleeve's value in token1.
+        _trade(false, -400e18);
+        assertFalse(settler.isBonded(sleeve), "the move left the bond short");
         vm.prank(makeAddr("anyone"));
         settler.forceClose(sleeve);
         assertEq(hook.getRanges(sleeve).length, 0, "liquidity removed");

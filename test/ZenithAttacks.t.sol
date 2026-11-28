@@ -149,7 +149,7 @@ contract ZenithAttacksTest is ZenithTestBase {
     /// existing depositors' positions earn. A deposit adds its share of liquidity to every position, so this is
     /// exactly as good as adding that liquidity to the pool directly: the vault gives the attacker nothing extra.
     function test_depositSandwichEarnsNoMoreThanDirectLiquidity() public {
-        _bond(20e18);
+        _bond(150e18); // enough to cover the attacker's deposit, which a smaller bond refuses
         _shape(narrow);
         uint256 snap = vm.snapshotState();
 
@@ -185,7 +185,7 @@ contract ZenithAttacksTest is ZenithTestBase {
     /// the curator and leave an hour later, to take the compensation meant for the depositors who bore the loss.
     /// The slash is released over the next period, so an hour earns about 1/168 of the attacker's share of it.
     function test_slashSandwichTakesAlmostNothing() public {
-        _bond(20e18);
+        _bond(150e18); // enough to cover the attacker's deposit, which a smaller bond refuses
         _shape(narrow / 4);
         vm.warp(block.timestamp + 1 days);
         _shape(narrow);
@@ -370,6 +370,31 @@ contract ZenithAttacksTest is ZenithTestBase {
         _swapToPrice(attacker, start);
         vm.roll(block.number + 1);
         hook.poke(sleeve);
+    }
+
+    /// @notice Attack: a whale deposit, twenty times the sleeve, made a curator bonded at twice the minimum look
+    /// under-bonded, and anyone (the keeper, even) could then force-close it, pulling every depositor's liquidity
+    /// out of the pool. A deposit into a managed sleeve now reverts if it would outgrow the curator's bond.
+    function test_aDepositCannotOutgrowTheBond() public {
+        _bond(20e18); // 10% of a 200-token sleeve: twice the minimum
+        ZenithHook.Range[] memory two = new ZenithHook.Range[](2);
+        two[0] = _range(-600, 600, narrow / 2);
+        two[1] = _range(-1200, 1200, narrow / 4);
+        vm.prank(curator);
+        hook.setShape(sleeve, two);
+
+        vm.prank(attacker);
+        vm.expectRevert(ZenithHook.NotBonded.selector);
+        hook.fund(sleeve, 4000e18, 4000e18);
+
+        // A deposit the bond covers goes through, and a bigger bond lets the sleeve grow.
+        vm.prank(attacker);
+        hook.fund(sleeve, 100e18, 100e18);
+        _bond(200e18);
+        vm.prank(attacker);
+        hook.fund(sleeve, 1000e18, 1000e18);
+        assertTrue(settler.isBonded(sleeve));
+        assertEq(hook.getRanges(sleeve).length, 2, "still managed");
     }
 
     // ------------------------------------------------------------------
