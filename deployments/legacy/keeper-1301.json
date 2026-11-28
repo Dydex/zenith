@@ -1,0 +1,5 @@
+{
+  "chainId": 1301,
+  "note": "Built on the legacy reactive-lib; superseded on 2026-11-28 by the Reactive Omni keeper in keeper-1301.json. Holds 0.01 ETH; its public sweep() still works.",
+  "keeper": "0xCdd97A3B6D5A4c1426aa6A92DC576443428Da5f7"
+}
