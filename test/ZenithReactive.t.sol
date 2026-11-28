@@ -27,6 +27,12 @@ contract MockSystemContract {
         subscriptions.push([chainId, uint256(uint160(target)), t0, t1, t2, t3]);
     }
 
+    uint256 public unsubscribed;
+
+    function unsubscribe(uint256, address, uint256, uint256, uint256, uint256) external {
+        ++unsubscribed;
+    }
+
     function requestCallbackV_1_0(CallbackConfiguration memory config) external {
         _callbacks.push(config);
     }
@@ -287,6 +293,21 @@ contract ZenithReactiveTest is ZenithTestBase {
         reactive.setKeeper(address(1));
         vm.expectRevert(abi.encodeWithSignature("KeeperAlreadySet()"));
         reactive.setKeeper(address(1));
+    }
+
+    /// @notice Retiring unsubscribes, returns the balance to the deployer's choice of address, and only the deployer
+    /// can do it.
+    function test_retireUnsubscribesAndReturnsTheBalance() public {
+        vm.deal(address(reactive), 3 ether);
+        address payable to = payable(makeAddr("treasury"));
+        vm.prank(makeAddr("stranger"));
+        vm.expectRevert(abi.encodeWithSignature("NotOwner()"));
+        reactive.retire(to);
+
+        reactive.retire(to);
+        assertEq(system.unsubscribed(), 2, "both subscriptions dropped");
+        assertEq(to.balance, 3 ether, "balance returned");
+        assertEq(address(reactive).balance, 0);
     }
 
     function test_reactsToNothingUntilTheKeeperIsSet() public {

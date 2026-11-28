@@ -34,6 +34,7 @@ contract ZenithReactive is AbstractReactive {
     address public keeper;
 
     event KeeperSet(address keeper);
+    event Retired(address to, uint256 amount);
 
     error NotOwner();
     error KeeperAlreadySet();
@@ -55,6 +56,22 @@ contract ZenithReactive is AbstractReactive {
         if (keeper != address(0)) revert KeeperAlreadySet();
         keeper = _keeper;
         emit KeeperSet(_keeper);
+    }
+
+    /// @notice Stops this contract for good, so a redeployment does not strand its balance: unsubscribes from both
+    /// events, settles any debt and returns what is left to `to`. By the deployer. Settlement, release and forced
+    /// close stay public functions on the hook's chain, so retiring the automation takes nothing from Zenith.
+    function retire(address payable to) external {
+        if (msg.sender != owner) revert NotOwner();
+        SYSTEM.unsubscribe(block.chainid, LEGACY_SYSTEM, cronTopic, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE);
+        SYSTEM.unsubscribe(
+            destinationChainId, hook, SLEEVE_FUNDED_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
+        );
+        _coverDebt();
+        uint256 amount = address(this).balance;
+        (bool ok,) = to.call{value: amount}("");
+        if (!ok) revert TransferFailed();
+        emit Retired(to, amount);
     }
 
     /// @notice Pays any debt to the system contract from this contract's balance.

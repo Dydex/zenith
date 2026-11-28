@@ -92,6 +92,7 @@ interface IZenithReactive {
     function keeper() external view returns (address);
     function cronTopic() external view returns (uint256);
     function setKeeper(address keeper) external;
+    function retire(address payable to) external;
     function react(LogRecord calldata log) external;
     function coverDebt() external;
 }
