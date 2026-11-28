@@ -1,0 +1,8 @@
+{
+  "block": 69005267,
+  "callbackProxy": "0x775c9B990ADe401060B78D0e98684eEf8d2466C1",
+  "chainId": 1301,
+  "keeper": "0x008972e31A14f4dC2Adddf362661Fa08aB657029",
+  "reactive": "0x45aeE45c5381aB9EE52b6FF7A160D5343D6ac72e",
+  "settler": "0x67C62E59253bC15b2792720f1867bF6a5e57c073"
+}
