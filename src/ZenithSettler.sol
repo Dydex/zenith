@@ -139,8 +139,9 @@ contract ZenithSettler is IZenithBond, IUnlockCallback {
         }
 
         if (slashed > 0) {
+            // Everything still pending, old and new, is released evenly over the next period. A slash never releases
+            // faster than that, so this costs depositors nothing but a little time.
             account.bond -= slashed;
-            release(sleeveId);
             account.pending += slashed;
             account.lastRelease = uint64(block.timestamp);
             account.releaseEnd = uint64(block.timestamp + hook.PERIOD());
@@ -149,7 +150,8 @@ contract ZenithSettler is IZenithBond, IUnlockCallback {
             feePaid = hook.settle(sleeveId, -int256(account.feeOwed), hook.getSleeve(sleeveId).curator, false);
             account.feeOwed -= feePaid;
         }
-        if (!isBonded(sleeveId) && hook.getRanges(sleeveId).length > 0) _forceClose(sleeveId);
+        // A sleeve this leaves under-bonded is closed by forceClose, which anyone can call and the keeper calls on its
+        // next tick. Keeping it out of settle bounds the gas of one settlement.
 
         emit Settled(sleeveId, excess, cumulative, feePaid, slashed);
     }

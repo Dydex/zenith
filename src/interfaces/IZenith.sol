@@ -60,7 +60,6 @@ interface IZenithKeeper {
     function settler() external view returns (address);
     function cursor() external view returns (uint256);
     function tick(address reactive) external;
-    function checkBond(address reactive, uint256 sleeveId) external;
     function sweep() external;
     function coverDebt() external;
 }
@@ -83,12 +82,10 @@ interface IZenithReactive {
         uint256 logIndex;
     }
 
-    function SLEEVE_FUNDED_TOPIC() external view returns (uint256);
     function CALLBACK_GAS_LIMIT() external view returns (uint64);
     function LEGACY_SYSTEM() external view returns (address);
     function owner() external view returns (address);
     function destinationChainId() external view returns (uint256);
-    function hook() external view returns (address);
     function keeper() external view returns (address);
     function cronTopic() external view returns (uint256);
     function setKeeper(address keeper) external;

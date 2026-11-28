@@ -85,9 +85,8 @@ contract ZenithReactiveTest is ZenithTestBase {
 
         vm.etch(SYSTEM, address(new MockSystemContract()).code);
         system = MockSystemContract(payable(SYSTEM));
-        reactive = IZenithReactive(
-            deployCode("ZenithReactive.sol:ZenithReactive", abi.encode(UNICHAIN_SEPOLIA, address(hook), CRON1000))
-        );
+        reactive =
+            IZenithReactive(deployCode("ZenithReactive.sol:ZenithReactive", abi.encode(UNICHAIN_SEPOLIA, CRON1000)));
         keeper = IZenithKeeper(
             deployCode("ZenithKeeper.sol:ZenithKeeper", abi.encode(address(settler), proxy, address(reactive)))
         );
@@ -149,16 +148,17 @@ contract ZenithReactiveTest is ZenithTestBase {
         assertEq(hook.getSleeve(sleeve).idle1 - idle, pending / 2, "half released to depositors");
     }
 
-    function test_checkBondClosesAnUnderBondedSleeveAtOnce() public {
+    /// @notice A price move can leave a bond short; the next tick closes the sleeve.
+    function test_tickClosesASleeveThePriceLeftUnderBonded() public {
         _bond(sleeve, 10e18);
         _shape(sleeve, narrow);
         vm.prank(proxy);
-        keeper.checkBond(address(reactive), sleeve);
+        keeper.tick(address(reactive));
         assertEq(hook.getRanges(sleeve).length, 1, "still bonded: left alone");
 
-        hook.fund(sleeve, 100e18, 100e18); // the same bond no longer covers the larger sleeve
+        _trade(false, -400e18); // token0 doubles against token1: the same bond no longer covers the sleeve
         vm.prank(proxy);
-        keeper.checkBond(address(reactive), sleeve);
+        keeper.tick(address(reactive));
         assertEq(hook.getRanges(sleeve).length, 0, "closed");
     }
 
@@ -212,71 +212,87 @@ contract ZenithReactiveTest is ZenithTestBase {
         assertEq(hook.getScore(third).periodStart, block.timestamp, "the rest were finished next time");
     }
 
-    /// @notice The most one sleeve can cost a sweep: four ranges, a period that ends in a slash, and a bond that no
-    /// longer covers the sleeve, so it is settled, slashed and force-closed in one visit. It must fit in the
-    /// allowance the keeper keeps back. Run with `--isolate` so every call is a fresh transaction with cold storage,
-    /// as on chain: about 794k gas on Foundry 1.10.1, against an allowance of 1M.
+    /// @notice The heaviest visits a sweep can make to one sleeve, each of which must fit the allowance the keeper
+    /// keeps back, or a sweep could start a sleeve it cannot finish. A sweep does at most one thing per sleeve, so a
+    /// rally that both costs the curator against the control and leaves its bond short takes two visits: settled and
+    /// slashed, then force-closed. Run with `--isolate` so every call is a fresh transaction with cold storage.
     function test_worstCaseSleeveFitsTheGasAllowance() public {
-        _bond(sleeve, 10.2e18);
-        _fourRanges(narrow / 48); // small at the period's start
-        vm.warp(block.timestamp + 1 days);
-        _fourRanges(narrow / 12); // large just before a trend
-        _trade(true, -80e18);
-        _fourRanges(narrow / 48);
-        hook.fund(sleeve, 100e18, 100e18); // a deposit doubles the sleeve, so the bond falls short
-        vm.warp(block.timestamp + hook.PERIOD());
+        _rallyAgainstTheCurator(1);
+    }
 
-        uint256 before = gasleft();
-        keeper.sweep();
-        uint256 used = before - gasleft();
-        (,,,,, uint256 pending,,) = settler.accounts(sleeve);
-        assertGt(pending, 0, "slashed");
-        assertEq(hook.getRanges(sleeve).length, 0, "and force-closed");
-        emit log_named_uint("gas for the worst-case sleeve", used);
+    /// @notice The same in a full pool, every curator sleeve with four ranges, because every checkpoint values every
+    /// sleeve.
+    function test_worstCaseSleeveInAFullPoolFitsTheGasAllowance() public {
+        _rallyAgainstTheCurator(hook.MAX_SLEEVES() - 1);
+    }
+
+    /// @notice A settlement that pays the curator a fee, in a full pool.
+    function test_feePayingSettlementInAFullPoolFitsTheGasAllowance() public {
+        _bond(sleeve, 20e18);
+        _fourRanges(narrow / 48);
+        _fillPool();
+        vm.warp(block.timestamp + 1 days);
+        _fourRanges(narrow / 12); // large before a fee-rich, range-bound stretch
+        for (uint256 i; i < 10; ++i) {
+            _trade(true, -20e18);
+            _trade(false, -20e18);
+        }
+        vm.warp(block.timestamp + 6 days);
+        uint256 used = _measureSweep();
+        (,,,, uint256 feeOwed,,,) = settler.accounts(sleeve);
+        assertGt(hook.getScore(sleeve).lastExcess, 0, "a good period");
+        assertEq(feeOwed, 0, "the fee was paid");
+        emit log_named_uint("gas for a fee-paying settlement in a full pool", used);
         assertLt(used, keeper.GAS_PER_SLEEVE(), "fits the allowance");
     }
 
-    /// @notice The same worst case in a full pool, every curator sleeve with four ranges, because every checkpoint
-    /// values every sleeve. Measured with `--isolate` for cold storage.
-    function test_worstCaseSleeveInAFullPoolFitsTheGasAllowance() public {
+    function _rallyAgainstTheCurator(uint256 curators) internal {
         _bond(sleeve, 10.2e18);
-        _fourRanges(narrow / 48);
-        for (uint256 i = 2; i < hook.MAX_SLEEVES(); ++i) {
+        _fourRanges(narrow / 48); // small at the period's start
+        if (curators > 1) _fillPool();
+        vm.warp(block.timestamp + 1 days);
+        _fourRanges(narrow / 12); // large just before a trend
+        _trade(false, -150e18); // token0 rallies: a loss against the control, and a bigger sleeve in token1
+        vm.warp(block.timestamp + 6 days);
+
+        uint256 settling = _measureSweep();
+        (,,,,, uint256 pending,,) = settler.accounts(sleeve);
+        assertGt(pending, 0, "settled and slashed");
+        assertGt(hook.getRanges(sleeve).length, 0, "closed on a later visit, not this one");
+        uint256 closing = _measureSweep();
+        assertEq(hook.getRanges(sleeve).length, 0, "force-closed");
+
+        emit log_named_uint("curator sleeves", curators);
+        emit log_named_uint("gas for settling and slashing", settling);
+        emit log_named_uint("gas for the forced close     ", closing);
+        assertLt(settling, keeper.GAS_PER_SLEEVE(), "settling fits the allowance");
+        assertLt(closing, keeper.GAS_PER_SLEEVE(), "closing fits the allowance");
+    }
+
+    /// @dev Opens curator sleeves up to the limit, each bonded with four small ranges.
+    function _fillPool() internal {
+        for (uint256 i = hook.sleeveCount(); i < hook.MAX_SLEEVES(); ++i) {
             uint256 id = _openFundedSleeve(curator, 100e18, 100e18);
             _bond(id, 20e18);
             _fourRangesOn(id, narrow / 48);
         }
         assertEq(hook.sleeveCount(), hook.MAX_SLEEVES(), "a full pool");
-        vm.warp(block.timestamp + 1 days);
-        _fourRanges(narrow / 12);
-        _trade(true, -80e18);
-        _fourRanges(narrow / 48);
-        hook.fund(sleeve, 100e18, 100e18);
-        vm.warp(block.timestamp + 6 days); // only the first curator's period is due
+    }
 
+    function _measureSweep() internal returns (uint256 used) {
+        vm.roll(block.number + 1);
         uint256 before = gasleft();
         keeper.sweep();
-        uint256 used = before - gasleft();
-        assertEq(hook.getRanges(sleeve).length, 0, "settled, slashed and force-closed");
-        emit log_named_uint("gas for the worst-case sleeve in a full pool", used);
-        assertLt(used, keeper.GAS_PER_SLEEVE(), "fits the allowance");
+        used = before - gasleft();
     }
 
     // ------------------------------------------------------------------
     // Reactive contract
     // ------------------------------------------------------------------
 
-    function test_subscribesToCronAndDeposits() public view {
-        assertEq(system.subscriptionCount(), 2);
+    function test_subscribesToCron() public view {
+        assertEq(system.subscriptionCount(), 1);
         _assertSubscription(0, [block.chainid, uint256(uint160(LEGACY_SYSTEM)), CRON1000, IGNORE, IGNORE, IGNORE]);
-        _assertSubscription(
-            1,
-            [UNICHAIN_SEPOLIA, uint256(uint160(address(hook))), reactive.SLEEVE_FUNDED_TOPIC(), IGNORE, IGNORE, IGNORE]
-        );
-    }
-
-    function test_sleeveFundedTopicMatchesTheHookEvent() public view {
-        assertEq(bytes32(reactive.SLEEVE_FUNDED_TOPIC()), ZenithHook.SleeveFunded.selector);
     }
 
     function test_onlyTheSystemContractCanReact() public {
@@ -305,15 +321,14 @@ contract ZenithReactiveTest is ZenithTestBase {
         reactive.retire(to);
 
         reactive.retire(to);
-        assertEq(system.unsubscribed(), 2, "both subscriptions dropped");
+        assertEq(system.unsubscribed(), 1, "unsubscribed");
         assertEq(to.balance, 3 ether, "balance returned");
         assertEq(address(reactive).balance, 0);
     }
 
     function test_reactsToNothingUntilTheKeeperIsSet() public {
-        IZenithReactive fresh = IZenithReactive(
-            deployCode("ZenithReactive.sol:ZenithReactive", abi.encode(UNICHAIN_SEPOLIA, address(hook), CRON1000))
-        );
+        IZenithReactive fresh =
+            IZenithReactive(deployCode("ZenithReactive.sol:ZenithReactive", abi.encode(UNICHAIN_SEPOLIA, CRON1000)));
         uint256 before = system.callbackCount();
         vm.prank(SYSTEM);
         fresh.react(_cronLog());
@@ -326,22 +341,14 @@ contract ZenithReactiveTest is ZenithTestBase {
         _assertCallback(abi.encodeCall(IZenithKeeper.tick, (address(0))));
     }
 
-    function test_depositRequestsABondCheckForThatSleeve() public {
-        IZenithReactive.LogRecord memory log = _fundedLog(UNICHAIN_SEPOLIA, address(hook), sleeve);
-        vm.prank(SYSTEM);
-        reactive.react(log);
-        _assertCallback(abi.encodeCall(IZenithKeeper.checkBond, (address(0), sleeve)));
-    }
-
     function test_ignoresLookalikeEvents() public {
-        IZenithReactive.LogRecord memory otherHook = _fundedLog(UNICHAIN_SEPOLIA, makeAddr("another hook"), sleeve);
-        IZenithReactive.LogRecord memory otherChain = _fundedLog(1, address(hook), sleeve); // same address elsewhere
         IZenithReactive.LogRecord memory fakeCron = _cronLog();
         fakeCron.contractAddress = makeAddr("not the system contract");
+        IZenithReactive.LogRecord memory otherTopic = _cronLog();
+        otherTopic.topic0 = uint256(keccak256("Cron100()"));
         vm.startPrank(SYSTEM);
-        reactive.react(otherHook);
-        reactive.react(otherChain);
         reactive.react(fakeCron);
+        reactive.react(otherTopic);
         vm.stopPrank();
         assertEq(system.callbackCount(), 0, "no callbacks");
     }
@@ -392,20 +399,6 @@ contract ZenithReactiveTest is ZenithTestBase {
         log.topic0 = CRON1000;
         log.data = abi.encode(uint256(1000));
         log.opCode = 1;
-    }
-
-    function _fundedLog(uint256 chainId, address emitter, uint256 sleeveId)
-        internal
-        view
-        returns (IZenithReactive.LogRecord memory log)
-    {
-        log.chainId = chainId;
-        log.contractAddress = emitter;
-        log.topic0 = reactive.SLEEVE_FUNDED_TOPIC();
-        log.topic1 = sleeveId;
-        log.topic2 = uint256(uint160(address(this)));
-        log.data = abi.encode(uint256(1e18), uint256(1e18), uint256(1e18));
-        log.opCode = 3;
     }
 
     function _assertSubscription(uint256 i, uint256[6] memory expected) internal view {

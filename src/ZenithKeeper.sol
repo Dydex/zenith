@@ -16,9 +16,11 @@ import {IZenithHook, IZenithSettler} from "./interfaces/IZenith.sol";
 /// and only for its own reactive contract, fixed at deployment. The proxy bills callbacks to this contract in native
 /// ETH, even ones it rejects, so it must hold some; a keeper in debt receives nothing until `coverDebt` is called.
 contract ZenithKeeper is AbstractCallback {
-    /// @notice Gas kept back for one sleeve's settlement. A sweep stops before a sleeve it might not finish and
-    /// resumes from that sleeve on the next tick, so no sleeve is starved by the ones before it.
-    uint256 public constant GAS_PER_SLEEVE = 2_500_000;
+    /// @notice Gas kept back for one sleeve's visit. A sweep stops before a sleeve it might not finish and resumes from
+    /// that sleeve on the next tick, so no sleeve is starved by the ones before it. The heaviest visit, a fee-paying
+    /// settlement in a full pool, costs about 2.6M gas in a fresh transaction; a 5M callback leaves the keeper about
+    /// 4.85M.
+    uint256 public constant GAS_PER_SLEEVE = 3_500_000;
 
     IZenithHook public immutable hook;
     IZenithSettler public immutable settler;
@@ -49,12 +51,6 @@ contract ZenithKeeper is AbstractCallback {
         _sweep();
     }
 
-    /// @notice A deposit into `sleeveId` was seen on chain. A larger sleeve needs a larger bond, so close it at once
-    /// if its curator's bond no longer covers it, rather than waiting for the next tick.
-    function checkBond(address reactive, uint256 sleeveId) external onlyServiceProvider onlyCallbackSender(reactive) {
-        _closeIfUnderBonded(sleeveId);
-    }
-
     /// @notice The same sweep without Reactive: anyone may run it.
     function sweep() external {
         _sweep();
@@ -80,9 +76,11 @@ contract ZenithKeeper is AbstractCallback {
             uint256 curators = count - 1;
             uint256 id = cursor % curators + 1;
             while (visited < curators && gasleft() > GAS_PER_SLEEVE) {
+                // At most one of these per sleeve per visit, which bounds the gas of a visit; whatever is left is done
+                // on the next tick.
                 if (_settleIfDue(id)) ++settled;
-                if (_releaseIfPending(id)) ++released;
-                if (_closeIfUnderBonded(id)) ++closed;
+                else if (_closeIfUnderBonded(id)) ++closed;
+                else if (_releaseIfPending(id)) ++released;
                 ++visited;
                 id = id % curators + 1;
             }
