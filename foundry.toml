@@ -7,7 +7,7 @@ libs = ["lib"]
 auto_detect_solc = true
 evm_version = "cancun" # Uniswap v4 relies on transient storage (EIP-1153)
 optimizer = true
-optimizer_runs = 800
+optimizer_runs = 400
 bytecode_hash = "none"
 ffi = false
 fs_permissions = [{ access = "read-write", path = "./deployments" }]

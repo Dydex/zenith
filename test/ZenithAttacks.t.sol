@@ -212,6 +212,133 @@ contract ZenithAttacksTest is ZenithTestBase {
     }
 
     // ------------------------------------------------------------------
+    // Reshaping at a pushed price
+    // ------------------------------------------------------------------
+
+    /// @notice Attack: a curator with its own liquidity outside Zenith pushes the price up through that liquidity,
+    /// reshapes its sleeve into a narrow range just below the pushed price, then pushes the price back down through
+    /// the sleeve. The sleeve buys high on the way down; the curator's own position sold high on the way up. Before
+    /// the steady-price rule this took 7.80 tokens from the sleeve's depositors and left the curator 6.86 ahead, in
+    /// one block. Liquidity can now only be added while the price is within 30 ticks of the block's opening price.
+    function test_reshapeAtAPushedPriceIsRefused() public {
+        _attackSetup();
+        _swapAs(curator, false, 300e18); // push the price up through the curator's own range
+        ZenithHook.Range[] memory below = _rangeBelowPrice();
+        vm.prank(curator);
+        vm.expectRevert(ZenithHook.PriceMoved.selector);
+        hook.setShape(sleeve, below);
+    }
+
+    /// @notice The same attack spread over two blocks: the pushed price must be held through a whole block, open to
+    /// any arbitrageur, before the reshape is allowed. With nobody arbitraging, as here, it still pays; that is the
+    /// size of the prize an arbitrageur would take instead.
+    function test_reshapeAtAPushedPriceNeedsTheMoveToSurviveABlock() public {
+        (uint256 own0, uint256 own1) = _attackSetup();
+        uint256 depositorBefore = _depositorValueNow();
+        uint256 curatorBefore = _wealth(curator) + ZenithMath.value(own0, own1, SQRT_PRICE_1_1);
+
+        _swapAs(curator, false, 300e18);
+        vm.roll(block.number + 1); // held for a block: the pushed price is now the block's opening price
+        ZenithHook.Range[] memory below = _rangeBelowPrice();
+        vm.prank(curator);
+        hook.setShape(sleeve, below);
+        _swapToPrice(curator, SQRT_PRICE_1_1);
+        vm.prank(curator);
+        modifyLiquidityRouter.modifyLiquidity(
+            key, ModifyLiquidityParams(0, 1200, -2000e18, bytes32(uint256(9))), ZERO_BYTES
+        );
+
+        console2.log("held a block, depositors' loss", int256(depositorBefore) - int256(_depositorValueNow()));
+        console2.log("held a block, curator's gain  ", int256(_wealth(curator)) - int256(curatorBefore));
+    }
+
+    /// @notice A deposit adds liquidity to every range, so it is refused at a pushed price too: otherwise anyone
+    /// could push, deposit and push back, spreading the loss on their new slice over every depositor.
+    function test_depositAtAPushedPriceIsRefused() public {
+        _bond(20e18);
+        _shape(narrow);
+        _swapAs(attacker, false, 100e18);
+        vm.prank(attacker);
+        vm.expectRevert(ZenithHook.PriceMoved.selector);
+        hook.fund(sleeve, 100e18, 100e18);
+
+        // Leaving is never blocked: liquidity removed at a pushed price has already sold high.
+        hook.withdraw(sleeve, hook.sharesOf(sleeve, address(this)) / 2, address(this));
+    }
+
+    function test_controlCannotBeRedeployedAtAPushedPrice() public {
+        _swapAs(attacker, true, 100e18);
+        vm.expectRevert(ZenithHook.PriceMoved.selector);
+        hook.deployControl();
+        vm.roll(block.number + 1);
+        hook.deployControl(); // a block later, the moved price is the opening price
+    }
+
+    /// @notice Ordinary trading inside a block does not stop a curator: a small move is within the allowance.
+    function test_smallMovesInTheBlockStillAllowReshaping() public {
+        _bond(20e18);
+        _shape(narrow);
+        _swapAs(attacker, true, 1e18);
+        (, int24 open) = hook.blockOpenPrice();
+        (, int24 tick,,) = manager.getSlot0(key.toId());
+        assertTrue(tick != open, "the price did move");
+        _shape(narrow / 2);
+        assertEq(hook.getRanges(sleeve)[0].liquidity, narrow / 2);
+    }
+
+    function _attackSetup() internal returns (uint256 own0, uint256 own1) {
+        _bond(20e18);
+        _shape(narrow);
+        // The curator's own position, outside Zenith, where the push will happen.
+        vm.startPrank(curator);
+        MockERC20(Currency.unwrap(currency0)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        MockERC20(Currency.unwrap(currency1)).approve(address(modifyLiquidityRouter), type(uint256).max);
+        modifyLiquidityRouter.modifyLiquidity(
+            key, ModifyLiquidityParams(0, 1200, 2000e18, bytes32(uint256(9))), ZERO_BYTES
+        );
+        vm.stopPrank();
+        vm.roll(block.number + 1);
+        (own0, own1) = ZenithMath.amounts(0, 1200, 2000e18, SQRT_PRICE_1_1);
+    }
+
+    /// @dev A single range from tick 0 up to the current price, holding 90% of what the sleeve would hold in token1.
+    function _rangeBelowPrice() internal view returns (ZenithHook.Range[] memory below) {
+        (uint160 pushed,,,) = manager.getSlot0(key.toId());
+        int24 top = (TickMath.getTickAtSqrtPrice(pushed) / 60) * 60;
+        uint256 free1 = hook.getSleeve(sleeve).idle1;
+        ZenithHook.Range[] memory current = hook.getRanges(sleeve);
+        for (uint256 i; i < current.length; ++i) {
+            (, uint256 y) = ZenithMath.amounts(current[i].tickLower, current[i].tickUpper, current[i].liquidity, pushed);
+            free1 += y;
+        }
+        below = new ZenithHook.Range[](1);
+        below[0] = _range(
+            0,
+            top,
+            LiquidityAmounts.getLiquidityForAmount1(
+                TickMath.getSqrtPriceAtTick(0), TickMath.getSqrtPriceAtTick(top), free1 * 9 / 10
+            )
+        );
+    }
+
+    /// @dev What the original depositor's shares are worth at the current price, valued like the settler does.
+    function _depositorValueNow() internal view returns (uint256) {
+        (uint160 sqrtPriceX96,,,) = manager.getSlot0(key.toId());
+        ZenithHook.Sleeve memory s = hook.getSleeve(sleeve);
+        uint256 a0 = s.idle0;
+        uint256 a1 = s.idle1;
+        ZenithHook.Range[] memory ranges = hook.getRanges(sleeve);
+        for (uint256 i; i < ranges.length; ++i) {
+            (uint256 x, uint256 y) =
+                ZenithMath.amounts(ranges[i].tickLower, ranges[i].tickUpper, ranges[i].liquidity, sqrtPriceX96);
+            a0 += x;
+            a1 += y;
+        }
+        uint256 total = ZenithMath.value(a0, a1, sqrtPriceX96);
+        return total * hook.sharesOf(sleeve, address(this)) / hook.totalShares(sleeve);
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 

@@ -152,8 +152,8 @@ contract ZenithShapesTest is ZenithTestBase {
         hook.setShape(sleeve, shape);
         ZenithHook.Sleeve memory before = hook.getSleeve(sleeve);
 
-        swap(key, true, -1e18, ZERO_BYTES);
-        swap(key, false, -1e18, ZERO_BYTES);
+        _trade(true, -1e18);
+        _trade(false, -1e18);
         hook.poke(sleeve);
 
         ZenithHook.Sleeve memory afterPoke = hook.getSleeve(sleeve);
@@ -187,8 +187,8 @@ contract ZenithShapesTest is ZenithTestBase {
         hook.deployControl();
         uint128 liquidityBefore = hook.getRanges(hook.CONTROL_SLEEVE())[0].liquidity;
 
-        swap(key, true, -5e18, ZERO_BYTES);
-        swap(key, false, -5e18, ZERO_BYTES);
+        _trade(true, -5e18);
+        _trade(false, -5e18);
         hook.deployControl();
 
         ZenithHook.Sleeve memory control = hook.getSleeve(hook.CONTROL_SLEEVE());
@@ -220,7 +220,7 @@ contract ZenithShapesTest is ZenithTestBase {
 
             bool zeroForOne = (seed >> 200) & 1 == 1;
             int256 amountIn = -int256(bound(seed >> 100, 1e15, 20e18));
-            swap(key, zeroForOne, amountIn, ZERO_BYTES);
+            _trade(zeroForOne, amountIn);
 
             _assertLedgerEqualsClaims();
             _assertRangesMatchPool(sleeve);

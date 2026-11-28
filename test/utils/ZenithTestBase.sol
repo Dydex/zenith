@@ -76,7 +76,13 @@ abstract contract ZenithTestBase is Test, Deployers {
 
     /// @dev The core accounting invariant: the per-sleeve ledger sums to the claims the hook holds.
     function _assertLedgerEqualsClaims() internal view {
-        (uint256 total0, uint256 total1) = hook.totalIdle();
+        uint256 total0;
+        uint256 total1;
+        for (uint256 id; id < hook.sleeveCount(); ++id) {
+            ZenithHook.Sleeve memory s = hook.getSleeve(id);
+            total0 += s.idle0;
+            total1 += s.idle1;
+        }
         assertEq(total0, manager.balanceOf(address(hook), currency0.toId()), "ledger0 == claims0");
         assertEq(total1, manager.balanceOf(address(hook), currency1.toId()), "ledger1 == claims1");
     }

@@ -49,6 +49,10 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     /// @notice Length of a scoring period. A curator's excess is measured against its liquidity at period start.
     uint256 public constant PERIOD = 7 days;
 
+    /// @notice Liquidity is only added while the pool's price is within this many ticks of the block's opening
+    /// price, so nobody can push the price, add a sleeve's liquidity at it and push it back through that liquidity.
+    int24 internal constant MAX_PRICE_MOVE = 30;
+
     /// @dev Fixed-point scale of the control index (skill per unit of liquidity).
     int256 internal constant INDEX_SCALE = 1e18;
 
@@ -166,6 +170,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     error SettlerAlreadySet();
     error NotBonded();
     error UnbackedCredit();
+    error PriceMoved();
 
     constructor(IPoolManager _poolManager, address _initializer) BaseHook(_poolManager) {
         if (_initializer == address(0)) revert ZeroInitializer();
@@ -219,6 +224,15 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         BlockOpen memory open = _open;
         if (open.blockNumber == block.number) return (open.sqrtPriceX96, open.tick);
         (sqrtPriceX96, tick,,) = poolManager.getSlot0(poolKey.toId());
+    }
+
+    /// @dev Reverts if the price has moved more than MAX_PRICE_MOVE ticks from the block's opening price. Removing
+    /// liquidity is never restricted: liquidity that leaves at a pushed price has already sold high.
+    function _requireSteadyPrice() internal view {
+        (, int24 open) = blockOpenPrice();
+        (, int24 tick,,) = poolManager.getSlot0(poolKey.toId());
+        int24 moved = tick - open;
+        if (moved > MAX_PRICE_MOVE || moved < -MAX_PRICE_MOVE) revert PriceMoved();
     }
 
     // ------------------------------------------------------------------
@@ -337,7 +351,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     }
 
     /// @notice Sum of idle balances across all sleeves. Must equal this hook's ERC-6909 claims for each currency.
-    function totalIdle() public view returns (uint256 total0, uint256 total1) {
+    function _totalIdle() internal view returns (uint256 total0, uint256 total1) {
         for (uint256 i; i < sleeveCount; ++i) {
             total0 += _sleeves[i].idle0;
             total1 += _sleeves[i].idle1;
@@ -499,6 +513,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         PoolKey memory key = poolKey;
         bytes32 salt = sleeveSalt(sleeveId);
         Range[] storage ranges = _ranges[sleeveId];
+        if (add && ranges.length > 0) _requireSteadyPrice();
         for (uint256 i = ranges.length; i > 0; --i) {
             Range storage r = ranges[i - 1];
             uint128 change = FullMath.mulDiv(r.liquidity, shares, supply).toUint128();
@@ -553,7 +568,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         Currency currency1 = poolKey.currency1;
         if (amount1 > 0) {
             moved = amount1.toUint256();
-            (, uint256 total1) = totalIdle();
+            (, uint256 total1) = _totalIdle();
             if (poolManager.balanceOf(address(this), currency1.toId()) < total1 + moved) revert UnbackedCredit();
             sleeve.idle1 += moved.toUint128();
             score.held1 += moved.toUint128();
@@ -599,6 +614,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         }
         delete _ranges[sleeveId];
 
+        if (next.length > 0) _requireSteadyPrice();
         for (uint256 i; i < next.length; ++i) {
             (BalanceDelta delta,) = poolManager.modifyLiquidity(
                 key,

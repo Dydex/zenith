@@ -65,6 +65,9 @@ mutate "deposits counted as skill" \
 mutate "scores valued at the spot price, not the block-open price" \
     's/if (open.blockNumber == block.number) return (open.sqrtPriceX96, open.tick);/if (false) return (open.sqrtPriceX96, open.tick);/' \
     ZenithAttacksTest
+mutate "liquidity added however far the price has moved in the block" \
+    's/if (moved > MAX_PRICE_MOVE || moved < -MAX_PRICE_MOVE) revert PriceMoved();/moved;/' \
+    ZenithAttacksTest
 mutate "deposits stay idle instead of buying into positions" \
     's/(int256 net0, int256 net1) = _scaleRanges(sleeveId, shares, supply, true);/(int256 net0, int256 net1) = (int256(0), int256(0));/' \
     ZenithAttacksTest

@@ -44,9 +44,9 @@ contract ZenithTwinFeesTest is ZenithTestBase {
         _shapeWithTwins(sleeveA, curatorA, shapeA);
         _shapeWithTwins(sleeveB, curatorB, shapeB);
 
-        swap(key, true, -40e18, ZERO_BYTES);
-        swap(key, false, -70e18, ZERO_BYTES);
-        swap(key, true, -25e18, ZERO_BYTES);
+        _trade(true, -40e18);
+        _trade(false, -70e18);
+        _trade(true, -25e18);
 
         (uint256 a0, uint256 a1) = _assertSleeveMatchesTwins(sleeveA);
         _assertSleeveMatchesTwins(sleeveB);
@@ -63,8 +63,8 @@ contract ZenithTwinFeesTest is ZenithTestBase {
         hook.deployControl();
         _openTwinsFor(control);
 
-        swap(key, true, -30e18, ZERO_BYTES);
-        swap(key, false, -45e18, ZERO_BYTES);
+        _trade(true, -30e18);
+        _trade(false, -45e18);
 
         (uint256 c0, uint256 c1) = _assertSleeveMatchesTwins(control);
         assertGt(c0 + c1, 0, "control earned fees");
@@ -197,7 +197,7 @@ contract ZenithTwinFeesTest is ZenithTestBase {
         uint256 n = bound(seed, 1, maxSwaps);
         for (uint256 i; i < n; ++i) {
             uint256 r = uint256(keccak256(abi.encode(seed, "swap", i)));
-            swap(key, r & 1 == 1, -int256(bound(r >> 8, 1e15, 40e18)), ZERO_BYTES);
+            _trade(r & 1 == 1, -int256(bound(r >> 8, 1e15, 40e18)));
         }
     }
 }

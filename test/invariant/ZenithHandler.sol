@@ -118,6 +118,7 @@ contract ZenithHandler is Test {
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
             ""
         );
+        vm.roll(block.number + 1); // each trade in its own block, as on chain
         calls["swap"]++;
         _recordFees();
     }

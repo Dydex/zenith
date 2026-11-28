@@ -2,7 +2,7 @@
 
 Zenith pays curators for skill measured against a passive control, and takes part of a bond when they fall behind it. Anything that moves money on a score is a target, so we attacked our own rules before anyone else could. Each attack below is a test in [`test/ZenithAttacks.t.sol`](../test/ZenithAttacks.t.sol), run end to end against the real hook, settler and PoolManager. The numbers are from those tests (token amounts, 18 decimals).
 
-Two of these were real holes in the code as it stood on Nov 26: the deposit sandwich, which we demonstrated, and the slash sandwich, which follows from the same arithmetic. Both are now fixed, and each defence has a planted bug in [`script/mutation.sh`](../script/mutation.sh) to prove the tests catch it if it regresses.
+Three of these were real holes: the deposit sandwich, which we demonstrated, the slash sandwich, which follows from the same arithmetic, and a curator reshaping its sleeve at a price it had just pushed, found on Nov 28 after deployment. All three are fixed, and each defence has a planted bug in [`script/mutation.sh`](../script/mutation.sh) to prove the tests catch it if it regresses.
 
 ## Who can attack
 
@@ -76,6 +76,16 @@ A fuzz test (`testFuzz_depositIntoPositionsIsBoundedAndRoundTripsSafely`, 10,000
 
 **Result.** `test_slashSandwichTakesAlmostNothing`. Against a slash of 0.1288, an attacker who deposits ten times the sleeve and stays an hour gains 0.00066: **0.5%** of the slash. Released all at once, it would have taken its share of the sleeve, about 90%; the mutation check plants exactly that bug and this test catches it.
 
+### 6. Reshaping at a pushed price (fixed Nov 28)
+
+**Attack.** A curator that also has liquidity of its own outside Zenith pushes the price up through it, reshapes its sleeve into a narrow range just below the pushed price, then pushes the price back down through the sleeve. On the way down the sleeve buys at prices that are about to fall; the curator's own position sold at them on the way up. The block-open price protected scores, not this: a reshape moves real tokens at the real price.
+
+**What we found.** In `test_reshapeAtAPushedPriceNeedsTheMoveToSurviveABlock`'s scenario, done in one block, the sleeve's depositors lost **7.80 tokens** (3.9% of the sleeve) and the curator came out **6.86 tokens** ahead. The slash that follows recovers at most 20% of the shortfall, so the attack paid. Deposits and redeploying the control add liquidity at the current price too, so anyone could run a version of it.
+
+**Defence.** Liquidity can only be added while the price is within 30 ticks (about 0.3%) of the block's opening price. Adding liquidity in a reshape, in a deposit into a sleeve with positions, or in `deployControl` reverts with `PriceMoved` otherwise. Removing liquidity is never restricted: liquidity that leaves at a pushed price has already sold high, so withdrawals and forced closes stay open.
+
+**Result.** `test_reshapeAtAPushedPriceIsRefused`, `test_depositAtAPushedPriceIsRefused` and `test_controlCannotBeRedeployedAtAPushedPrice` show each path refused, and `test_smallMovesInTheBlockStillAllowReshaping` shows ordinary trading does not stop a curator. Done across two blocks, the attack still works if nobody arbitrages the pushed price for a whole block, and the test logs the same 7.80 tokens: that is the prize an arbitrageur takes instead.
+
 ## Argued, not yet tested
 
 - **Griefing another sleeve.** Trading heavily can lower the score of a sleeve whose liquidity is below its period-start level, as in row two of attack 1. The attacker pays the pool's fee on all of that volume (0.9 tokens for the 300-token push) to cause a slash of 20% of the drop (about 0.16), and gains nothing.
@@ -84,7 +94,7 @@ A fuzz test (`testFuzz_depositIntoPositionsIsBoundedAndRoundTripsSafely`, 10,000
 
 ## Known limitations
 
-- **A price held across a block.** The clamp makes in-block pushes free of effect, not multi-block ones. A push that survives a block is exposed to arbitrage for that block. On a chain with private ordering, a well-funded attacker could still try it, and the attack tests show the size of the prize.
+- **A price held across a block.** The clamp and the steady-price rule make in-block pushes free of effect, not multi-block ones. A push that survives a block is exposed to arbitrage for that block. On a chain with private ordering, a well-funded attacker could still try it, and the attack tests show the size of the prize.
 - **Leaving before a settlement.** A depositor who withdraws before settlement neither pays its share of that period's curator fee nor receives its share of a slash. Funds handle this with fee equalisation; Zenith does not yet.
 - **Draining the keeper's ETH.** Reactive bills a callback to its recipient even when the recipient rejects it. Anyone can deploy a reactive contract that requests callbacks to `ZenithKeeper`: the keeper refuses them, but each still costs it gas, and a keeper in debt receives nothing. This stops the automation, not Zenith. Settlement, release and forced close stay public functions anyone can call, and topping up the keeper and calling `coverDebt` restores it.
 - **One pool per hook, token1 bonds and a fixed 7-day period** are design choices for the hookathon, not limits of the method.
