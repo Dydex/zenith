@@ -17,7 +17,8 @@ import {ZenithTestBase} from "./utils/ZenithTestBase.sol";
 
 /// @notice Gas, measured as a fresh transaction would pay it: every contract the call touches is cooled first, and
 /// the figures exclude the 21,000 base cost. The hookless pool has the same tokens, fee and liquidity.
-/// Run with: forge test --match-contract ZenithGasTest -vv
+/// Run with: forge test --match-contract ZenithGasTest -vv. The README's figures come from Foundry 1.10.1, the
+/// version CI pins; older versions cool storage less completely and report lower numbers.
 contract ZenithGasTest is ZenithTestBase {
     PoolKey internal plain;
     ZenithSettler internal settler;
@@ -61,8 +62,8 @@ contract ZenithGasTest is ZenithTestBase {
     }
 
     /// @dev Each case starts from the same saved state, so every swap crosses the same ticks at the same prices.
-    /// "Later in the block" follows a dust swap in the same transaction, in both pools alike, because a slot already
-    /// written earlier in a transaction is cheaper to write again.
+    /// "Later in the block" follows a dust swap that has already recorded the block's opening price, in both pools
+    /// alike, so the hook only reads it.
     function test_swapGas() public {
         uint256 snap = vm.snapshotState();
         uint256 plainFirst = _measureSwap(plain, false);
@@ -79,7 +80,7 @@ contract ZenithGasTest is ZenithTestBase {
         console2.log("Zenith, later swap in the block  ", zenithLater);
         // The hook only records the block's opening price: one slot write per block, one read otherwise.
         assertLt(zenithFirst - plainFirst, 15_000, "first swap of a block");
-        assertLt(zenithLater - plainLater, 7_000, "every other swap");
+        assertLt(zenithLater - plainLater, 8_000, "every other swap");
     }
 
     function test_operationGas() public {

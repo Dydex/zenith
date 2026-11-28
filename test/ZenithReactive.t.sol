@@ -209,7 +209,7 @@ contract ZenithReactiveTest is ZenithTestBase {
     /// @notice The most one sleeve can cost a sweep: four ranges, a period that ends in a slash, and a bond that no
     /// longer covers the sleeve, so it is settled, slashed and force-closed in one visit. It must fit in the
     /// allowance the keeper keeps back. Run with `--isolate` so every call is a fresh transaction with cold storage,
-    /// as on chain: about 693k gas, against an allowance of 1M.
+    /// as on chain: about 794k gas on Foundry 1.10.1, against an allowance of 1M.
     function test_worstCaseSleeveFitsTheGasAllowance() public {
         _bond(sleeve, 10.2e18);
         _fourRanges(narrow / 48); // small at the period's start
