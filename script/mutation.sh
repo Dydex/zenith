@@ -77,6 +77,9 @@ mutate "curators may shape with no live control" \
 mutate "liquidity added however far the price has moved in the block" \
     's/if (moved > MAX_PRICE_MOVE || moved < -MAX_PRICE_MOVE) revert PriceMoved();/moved;/' \
     ZenithAttacksTest
+mutate "a closed sleeve is not rebalanced through the pool" \
+    's/(int256 delta0, int256 delta1) = ZenithMath.swapToBalance(poolManager, key, sleeve.idle0, sleeve.idle1);/(int256 delta0, int256 delta1) = (int256(0), int256(0));/' \
+    ZenithBreakerTest
 mutate "deposits stay idle instead of buying into positions" \
     's/(int256 net0, int256 net1) = _scaleRanges(sleeveId, shares, supply, true);/(int256 net0, int256 net1) = (int256(0), int256(0));/' \
     ZenithAttacksTest
@@ -93,6 +96,15 @@ mutate "fee not capped at the bond" \
 mutate "slash released into a sleeve nobody holds" \
     's/if (hook.totalShares(sleeveId) == 0) {/if (false) {/' \
     ZenithSettlerTest settler
+mutate "the breaker never trips" \
+    's/return relative \* BPS < breaker.peak \* (BPS - BREAKER_BPS);/return false;/' \
+    ZenithBreakerTest settler
+mutate "a tripped sleeve does not lock its curator out" \
+    's/if (breakers\[sleeveId\].passive) return false;/if (false) return false;/' \
+    ZenithBreakerTest settler
+mutate "uncollected fees left out of a sleeve's value" \
+    's/        amount0 += fees0;/        amount0 += 0;/' \
+    ZenithBreakerTest settler
 mutate "slash released all at once" \
     's/released = elapsed >= left ? pending : pending \* elapsed \/ left;/released = pending;/' \
     ZenithAttacksTest settler
