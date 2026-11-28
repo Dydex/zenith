@@ -65,6 +65,12 @@ mutate "deposits counted as skill" \
 mutate "scores valued at the spot price, not the block-open price" \
     's/if (open.blockNumber == block.number) return (open.sqrtPriceX96, open.tick);/if (false) return (open.sqrtPriceX96, open.tick);/' \
     ZenithAttacksTest
+mutate "a checkpoint values only the control and the sleeve acted on" \
+    's/_accrue(id, sqrtPriceX96, tick, id == CONTROL_SLEEVE || id == sleeveId);/if (id == CONTROL_SLEEVE || id == sleeveId) _accrue(id, sqrtPriceX96, tick, true);/' \
+    ZenithAttacksTest
+mutate "curators may shape with no live control" \
+    's/if (controlIndexStart == 0) revert NoControl();/if (false) revert NoControl();/' \
+    ZenithLedgerTest
 mutate "liquidity added however far the price has moved in the block" \
     's/if (moved > MAX_PRICE_MOVE || moved < -MAX_PRICE_MOVE) revert PriceMoved();/moved;/' \
     ZenithAttacksTest
@@ -77,6 +83,12 @@ mutate "high-water mark never advances (gains paid again)" \
     ZenithSettlerTest settler
 mutate "slash kept by the settler instead of reaching depositors" \
     's/hook.settle(sleeveId, int256(released), address(0), false);/hook.settle(sleeveId, 0, address(0), false);/' \
+    ZenithSettlerTest settler
+mutate "fee not capped at the bond" \
+    's/account.feeOwed += fee < account.bond ? fee : account.bond;/account.feeOwed += fee;/' \
+    ZenithSettlerTest settler
+mutate "slash released into a sleeve nobody holds" \
+    's/if (hook.totalShares(sleeveId) == 0) {/if (false) {/' \
     ZenithSettlerTest settler
 mutate "slash released all at once" \
     's/released = elapsed >= left ? pending : pending \* elapsed \/ left;/released = pending;/' \
