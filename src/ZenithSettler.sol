@@ -13,7 +13,8 @@ import {ZenithMath} from "./ZenithMath.sol";
 /// @notice Holds curator bonds and settles each scoring period symmetrically. A curator earns a share of its
 /// excess skill when its cumulative excess reaches a new high, and pays the same share of a new low to its
 /// depositors from its bond. Both marks are cumulative, so a curator who gains and gives back the same amount is
-/// neither paid twice nor slashed for the wobble. A slash is released to the depositors evenly over the next
+/// neither paid twice nor slashed for the wobble. Both the fee and the slash are capped at the bond. A slash is
+/// released to the depositors evenly over the next
 /// period rather than all at once, so depositing just before a settlement and leaving just after earns almost none
 /// of it.
 /// @dev Bonds are in token1 and stay in the PoolManager as ERC-6909 claims owned by this contract, as do slashes
@@ -125,7 +126,10 @@ contract ZenithSettler is IZenithBond, IUnlockCallback {
         int256 cumulative = account.cumulative + excess;
         account.cumulative = cumulative;
         if (cumulative > account.highWater) {
-            account.feeOwed += uint256(cumulative - account.highWater) * SHARE_BPS / BPS;
+            // Capped at the bond, as a slash is: a curator can win at most what it has at stake, so a gamble with
+            // depositors' money has no upside the bond does not match.
+            uint256 fee = uint256(cumulative - account.highWater) * SHARE_BPS / BPS;
+            account.feeOwed += fee < account.bond ? fee : account.bond;
             account.highWater = cumulative;
         }
         if (cumulative < account.lowWater) {
@@ -156,6 +160,13 @@ contract ZenithSettler is IZenithBond, IUnlockCallback {
         Account storage account = accounts[sleeveId];
         uint256 pending = account.pending;
         if (pending == 0) return 0;
+        if (hook.totalShares(sleeveId) == 0) {
+            // Nobody holds the sleeve: pause the schedule, so a newcomer cannot collect what was owed to those who
+            // left.
+            account.releaseEnd += uint64(block.timestamp) - account.lastRelease;
+            account.lastRelease = uint64(block.timestamp);
+            return 0;
+        }
         uint256 left = account.releaseEnd - account.lastRelease;
         uint256 elapsed = block.timestamp - account.lastRelease;
         released = elapsed >= left ? pending : pending * elapsed / left;

@@ -165,6 +165,43 @@ contract ZenithSettlerTest is ZenithTestBase {
         assertEq(hook.getScore(sleeve).excess, score.excess, "a fee payment is not a loss");
     }
 
+    /// @notice The fee is capped at the bond, as the slash is, so a curator can win at most what it has at stake.
+    function test_feeIsCappedAtTheBond() public {
+        _bond(10e18);
+        _shape(narrow);
+        vm.warp(block.timestamp + hook.PERIOD());
+        // Pretend the period ended far ahead: 1,000 tokens of excess would be a 200-token fee.
+        ZenithHook.Score memory score = hook.getScore(sleeve);
+        score.lastExcess = 1000e18;
+        score.excess = 0;
+        vm.mockCall(address(hook), abi.encodeCall(ZenithHook.getScore, (sleeve)), abi.encode(score));
+        (, uint256 fee,) = settler.settle(sleeve);
+        vm.clearMockedCalls();
+        (, int256 cumulative, int256 highWater,, uint256 feeOwed,,,) = settler.accounts(sleeve);
+        assertEq(fee + feeOwed, 10e18, "fee paid plus owed is the bond, not 20% of the gain");
+        assertEq(highWater, cumulative, "the whole gain counts towards the high-water mark");
+    }
+
+    /// @notice A slash is not released into a sleeve nobody holds: a newcomer must not collect what was owed to those
+    /// who left. The schedule resumes when someone holds the sleeve again.
+    function test_releasePausesWhileNobodyHoldsTheSleeve() public {
+        _bond(20e18);
+        _badTiming();
+        (,, uint256 slashed) = _settle();
+        assertGt(slashed, 0);
+
+        hook.withdraw(sleeve, hook.sharesOf(sleeve, address(this)), address(this));
+        vm.warp(block.timestamp + hook.PERIOD() / 2);
+        assertEq(settler.release(sleeve), 0, "nothing released into an empty sleeve");
+        (,,,,, uint256 pending,,) = settler.accounts(sleeve);
+        assertEq(pending, slashed, "still owed");
+
+        vm.roll(block.number + 1);
+        hook.fund(sleeve, 10e18, 10e18);
+        vm.warp(block.timestamp + hook.PERIOD() / 2);
+        assertEq(settler.release(sleeve), slashed / 2, "the schedule resumed where it paused");
+    }
+
     // ------------------------------------------------------------------
     // Forced close and leaving
     // ------------------------------------------------------------------
