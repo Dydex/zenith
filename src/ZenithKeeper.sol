@@ -8,8 +8,8 @@ import {IZenithHook, IZenithSettler} from "./interfaces/IZenith.sol";
 
 /// @title ZenithKeeper
 /// @notice Receives Reactive Network callbacks on the hook's chain and runs Zenith's scheduled work: it settles every
-/// sleeve whose period is over, releases vested slashes to depositors and force-closes sleeves whose bond no longer
-/// covers them. Every action it takes is a public function anyone can call, so Zenith keeps working if Reactive
+/// sleeve whose period is over, trips the circuit breaker on sleeves that have fallen too far behind the control,
+/// moves sleeves whose bond no longer covers them to full range and releases vested slashes to depositors. Every action it takes is a public function anyone can call, so Zenith keeps working if Reactive
 /// stops; the keeper only makes sure someone always does.
 /// @dev Built on Reactive Omni. The callback proxy calls this contract and writes the address of the reactive
 /// contract that asked for the callback over its first argument. The keeper accepts a callback only from the proxy
@@ -28,7 +28,8 @@ contract ZenithKeeper is AbstractCallback {
     /// @notice The sleeve the next sweep starts from.
     uint256 public cursor;
 
-    event Swept(uint256 visited, uint256 settled, uint256 released, uint256 closed);
+    /// @dev `closed` counts sleeves moved to full range or a step further towards it.
+    event Swept(uint256 visited, uint256 settled, uint256 tripped, uint256 closed, uint256 released);
     event ActionFailed(uint256 indexed sleeveId, bytes4 indexed action, bytes reason);
 
     /// @param _settler The Zenith settler whose sleeves this keeper looks after.
@@ -69,8 +70,9 @@ contract ZenithKeeper is AbstractCallback {
         uint256 count = hook.sleeveCount();
         uint256 visited;
         uint256 settled;
-        uint256 released;
+        uint256 tripped;
         uint256 closed;
+        uint256 released;
         if (count > 1) {
             // Sleeve 0 is the control, which is never settled.
             uint256 curators = count - 1;
@@ -79,14 +81,16 @@ contract ZenithKeeper is AbstractCallback {
                 // At most one of these per sleeve per visit, which bounds the gas of a visit; whatever is left is done
                 // on the next tick.
                 if (_settleIfDue(id)) ++settled;
+                else if (_tripIfDue(id)) ++tripped;
                 else if (_closeIfUnderBonded(id)) ++closed;
+                else if (_rebalanceIfPassive(id)) ++closed;
                 else if (_releaseIfPending(id)) ++released;
                 ++visited;
                 id = id % curators + 1;
             }
             cursor = id - 1;
         }
-        emit Swept(visited, settled, released, closed);
+        emit Swept(visited, settled, tripped, closed, released);
     }
 
     function _settleIfDue(uint256 sleeveId) internal returns (bool) {
@@ -111,9 +115,37 @@ contract ZenithKeeper is AbstractCallback {
         }
     }
 
+    /// @dev Records the sleeve's best against the control, then trips the breaker if it has fallen far enough behind.
+    function _tripIfDue(uint256 sleeveId) internal returns (bool) {
+        try settler.observe(sleeveId) returns (bool due) {
+            if (!due) return false;
+        } catch {
+            return false;
+        }
+        try settler.trip(sleeveId) {
+            return true;
+        } catch (bytes memory reason) {
+            emit ActionFailed(sleeveId, IZenithSettler.trip.selector, reason);
+            return false;
+        }
+    }
+
+    /// @dev Takes another step towards full range for a passive sleeve that still holds much of its value idle.
+    function _rebalanceIfPassive(uint256 sleeveId) internal returns (bool) {
+        (, bool passive) = settler.breakers(sleeveId);
+        if (!passive || !settler.unbalanced(sleeveId)) return false;
+        try settler.rebalance(sleeveId) {
+            return true;
+        } catch (bytes memory reason) {
+            emit ActionFailed(sleeveId, IZenithSettler.rebalance.selector, reason);
+            return false;
+        }
+    }
+
     function _closeIfUnderBonded(uint256 sleeveId) internal returns (bool) {
         if (sleeveId == 0 || sleeveId >= hook.sleeveCount()) return false;
-        if (hook.getRanges(sleeveId).length == 0 || settler.isBonded(sleeveId)) return false;
+        (, bool passive) = settler.breakers(sleeveId);
+        if (passive || hook.getRanges(sleeveId).length == 0 || settler.isBonded(sleeveId)) return false;
         try settler.forceClose(sleeveId) {
             return true;
         } catch (bytes memory reason) {

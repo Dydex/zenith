@@ -81,7 +81,7 @@ contract ZenithAttacksTest is ZenithTestBase {
     /// @notice Attack: pushing the price so a bonded sleeve looks under-bonded, to force-close it. The bond is
     /// checked at the block-open price, so the sleeve stays bonded until a pushed price survives a block.
     function test_pricePushCannotForceCloseABondedSleeve() public {
-        _bond(10e18); // exactly 5% of a sleeve worth 200e18 at the opening price
+        _bond(10.2e18); // just over 5% of a sleeve worth 200e18 at the opening price
         _shape(narrow / 2);
         _swapAs(attacker, false, 300e18); // token0 now looks dearer, so the sleeve looks bigger in token1
         vm.expectRevert(ZenithSettler.StillBonded.selector);
@@ -89,7 +89,11 @@ contract ZenithAttacksTest is ZenithTestBase {
 
         vm.roll(block.number + 1);
         settler.forceClose(sleeve); // only once the price has held for a block
-        assertEq(hook.getRanges(sleeve).length, 0);
+        (, bool passive) = settler.breakers(sleeve);
+        assertTrue(passive);
+        vm.roll(block.number + 1);
+        if (settler.unbalanced(sleeve)) settler.rebalance(sleeve); // a one-sided sleeve takes a second step
+        _assertFullRange(sleeve);
     }
 
     /// @notice Attack: an under-bonded curator pushes the price so its sleeve looks small enough to shape.

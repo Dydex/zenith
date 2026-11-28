@@ -48,11 +48,17 @@ interface IZenithSettler {
     function settle(uint256 sleeveId) external returns (int256 excess, uint256 feePaid, uint256 slashed);
     function release(uint256 sleeveId) external returns (uint256 released);
     function forceClose(uint256 sleeveId) external;
+    function breakers(uint256 sleeveId) external view returns (uint256 peak, bool passive);
+    function relativeValue(uint256 sleeveId) external view returns (uint256);
+    function observe(uint256 sleeveId) external returns (bool due);
+    function trip(uint256 sleeveId) external;
+    function rebalance(uint256 sleeveId) external;
+    function unbalanced(uint256 sleeveId) external view returns (bool);
 }
 
 /// @notice ZenithKeeper, as seen from code compiled with 0.8.26 (tests and scripts).
 interface IZenithKeeper {
-    event Swept(uint256 visited, uint256 settled, uint256 released, uint256 closed);
+    event Swept(uint256 visited, uint256 settled, uint256 tripped, uint256 closed, uint256 released);
     event ActionFailed(uint256 indexed sleeveId, bytes4 indexed action, bytes reason);
 
     function GAS_PER_SLEEVE() external view returns (uint256);

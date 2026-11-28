@@ -217,8 +217,15 @@ contract ZenithSettlerTest is ZenithTestBase {
         assertFalse(settler.isBonded(sleeve), "the move left the bond short");
         vm.prank(makeAddr("anyone"));
         settler.forceClose(sleeve);
-        assertEq(hook.getRanges(sleeve).length, 0, "liquidity removed");
-        assertEq(_positionLiquidity(sleeve, -600, 600), 0);
+        // The sleeve held only token1 after the move: the close swaps half of it through the pool, and the next step
+        // places both sides at full range.
+        assertTrue(settler.unbalanced(sleeve), "one-sided, so not placed yet");
+        vm.roll(block.number + 1);
+        settler.rebalance(sleeve);
+        _assertFullRange(sleeve);
+        assertEq(_positionLiquidity(sleeve, -600, 600), 0, "the curator's range is gone");
+        (, bool passive) = settler.breakers(sleeve);
+        assertTrue(passive, "the curator is locked out");
         _assertLedgerEqualsClaims();
     }
 

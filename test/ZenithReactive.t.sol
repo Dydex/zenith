@@ -115,13 +115,13 @@ contract ZenithReactiveTest is ZenithTestBase {
         uint256 second = _openBondedShapedSleeve();
 
         vm.expectEmit(address(keeper));
-        emit IZenithKeeper.Swept(2, 0, 0, 0);
+        emit IZenithKeeper.Swept(2, 0, 0, 0, 0);
         vm.prank(proxy);
         keeper.tick(address(reactive)); // nothing due yet, but every tick leaves a trace
 
         vm.warp(block.timestamp + hook.PERIOD());
         vm.expectEmit(address(keeper));
-        emit IZenithKeeper.Swept(2, 2, 0, 0);
+        emit IZenithKeeper.Swept(2, 2, 0, 0, 0);
         vm.prank(proxy);
         keeper.tick(address(reactive));
         assertEq(hook.getScore(sleeve).periodStart, block.timestamp, "first sleeve settled");
@@ -158,8 +158,11 @@ contract ZenithReactiveTest is ZenithTestBase {
 
         _trade(false, -400e18); // token0 doubles against token1: the same bond no longer covers the sleeve
         vm.prank(proxy);
-        keeper.tick(address(reactive));
-        assertEq(hook.getRanges(sleeve).length, 0, "closed");
+        keeper.tick(address(reactive)); // goes passive; one-sided, so half is swapped this tick
+        vm.roll(block.number + 1);
+        vm.prank(proxy);
+        keeper.tick(address(reactive)); // and placed at full range on the next
+        _assertFullRange(sleeve);
     }
 
     function test_onlyTheCallbackProxyCanCall() public {
@@ -246,6 +249,33 @@ contract ZenithReactiveTest is ZenithTestBase {
         assertLt(used, keeper.GAS_PER_SLEEVE(), "fits the allowance");
     }
 
+    /// @notice The keeper trips the breaker on its sweep: a curator whose one-sided bet has left its sleeve 5% behind
+    /// the control is moved to full range on the next tick. A trip is the heaviest visit after a fee-paying
+    /// settlement, so it is measured in a full pool too.
+    function test_keeperTripsTheBreakerInAFullPool() public {
+        _bond(sleeve, 50e18);
+        _fillPool();
+        ZenithHook.Range[] memory below = new ZenithHook.Range[](4);
+        below[0] = _range(-3000, -60, 2e20); // about 73 of the sleeve's 100 token1 in all four
+        below[1] = _range(-2400, -120, 2e20);
+        below[2] = _range(-1800, -180, 2e20);
+        below[3] = _range(-1200, -240, 2e20);
+        vm.prank(curator);
+        hook.setShape(sleeve, below);
+        vm.prank(proxy);
+        keeper.tick(address(reactive)); // records the best against the control
+        for (uint256 i; i < 20 && !settler.observe(sleeve); ++i) {
+            _trade(true, -20e18);
+        }
+        assertTrue(settler.observe(sleeve), "due");
+
+        uint256 used = _measureSweep();
+        (, bool passive) = settler.breakers(sleeve);
+        assertTrue(passive, "tripped by the keeper");
+        emit log_named_uint("gas for a trip in a full pool", used);
+        assertLt(used, keeper.GAS_PER_SLEEVE(), "fits the allowance");
+    }
+
     function _rallyAgainstTheCurator(uint256 curators) internal {
         _bond(sleeve, 10.2e18);
         _fourRanges(narrow / 48); // small at the period's start
@@ -260,7 +290,7 @@ contract ZenithReactiveTest is ZenithTestBase {
         assertGt(pending, 0, "settled and slashed");
         assertGt(hook.getRanges(sleeve).length, 0, "closed on a later visit, not this one");
         uint256 closing = _measureSweep();
-        assertEq(hook.getRanges(sleeve).length, 0, "force-closed");
+        _assertFullRange(sleeve);
 
         emit log_named_uint("curator sleeves", curators);
         emit log_named_uint("gas for settling and slashing", settling);

@@ -354,7 +354,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     }
 
     /// @notice The position salt used for a sleeve. A sleeve's positions are keyed (hook, ticks, salt).
-    function sleeveSalt(uint256 sleeveId) public pure returns (bytes32) {
+    function _sleeveSalt(uint256 sleeveId) internal pure returns (bytes32) {
         return bytes32(sleeveId);
     }
 
@@ -387,7 +387,8 @@ contract ZenithHook is BaseHook, IUnlockCallback {
                 abi.decode(payload, (uint256, int256, address, bool));
             _checkpoint(sleeveId);
             if (close) {
-                _applyShape(sleeveId, new Range[](0));
+                // A closed sleeve goes passive: all of it at full range, like the control, not left idle.
+                _deployFullRange(sleeveId);
                 _afterShape(sleeveId);
             }
             return abi.encode(_transfer1(sleeveId, amount1, to));
@@ -401,7 +402,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
             _checkpoint(abi.decode(payload, (uint256)));
         } else if (action == Action.DeployControl) {
             _checkpoint(CONTROL_SLEEVE);
-            _deployControl();
+            _deployFullRange(CONTROL_SLEEVE);
             _afterShape(CONTROL_SLEEVE);
         } else if (action == Action.RollPeriod) {
             uint256 sleeveId = abi.decode(payload, (uint256));
@@ -522,7 +523,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         returns (int256 net0, int256 net1)
     {
         PoolKey memory key = poolKey;
-        bytes32 salt = sleeveSalt(sleeveId);
+        bytes32 salt = _sleeveSalt(sleeveId);
         Range[] storage ranges = _ranges[sleeveId];
         if (add && ranges.length > 0) _requireSteadyPrice();
         for (uint256 i = ranges.length; i > 0; --i) {
@@ -600,7 +601,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     /// difference against the sleeve's idle claims. All of it happens inside one unlock.
     function _applyShape(uint256 sleeveId, Range[] memory next) internal {
         PoolKey memory key = poolKey;
-        bytes32 salt = sleeveSalt(sleeveId);
+        bytes32 salt = _sleeveSalt(sleeveId);
         int256 net0;
         int256 net1;
         uint256 fees0;
@@ -648,7 +649,7 @@ contract ZenithHook is BaseHook, IUnlockCallback {
     /// @dev Collects fees on every position of the sleeve by modifying each by zero liquidity.
     function _poke(uint256 sleeveId) internal {
         PoolKey memory key = poolKey;
-        bytes32 salt = sleeveSalt(sleeveId);
+        bytes32 salt = _sleeveSalt(sleeveId);
         int256 net0;
         int256 net1;
         uint256 fees0;
@@ -672,22 +673,30 @@ contract ZenithHook is BaseHook, IUnlockCallback {
         _settleNet(key, sleeveId, net0, net1, fees0, fees1);
     }
 
-    /// @dev Withdraws the control's liquidity to idle (collecting its fees), then redeploys everything idle
-    /// as a single full-range position at the current price.
-    function _deployControl() internal {
-        _applyShape(CONTROL_SLEEVE, new Range[](0));
+    /// @dev Withdraws a sleeve's liquidity to idle (collecting its fees), then redeploys everything idle as a single
+    /// full-range position at the current price. Used for the control, and for any sleeve that is closed. A closed
+    /// curator sleeve then swaps half of what did not fit through the pool, so a one-sided sleeve becomes two-sided and
+    /// the next step places it too, rather than leaving it in one token. The swap is bounded in price, so in a thin
+    /// pool the sleeve walks into full range over several steps, with arbitrage restoring the price in between.
+    function _deployFullRange(uint256 sleeveId) internal {
+        _applyShape(sleeveId, new Range[](0));
 
         PoolKey memory key = poolKey;
+        Sleeve storage sleeve = _sleeves[sleeveId];
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
-        Sleeve storage control = _sleeves[CONTROL_SLEEVE];
         (int24 lower, int24 upper, uint128 liquidity) =
-            ZenithMath.fullRange(key.tickSpacing, sqrtPriceX96, control.idle0, control.idle1);
-        if (liquidity == 0) return;
-
-        Range[] memory shape = new Range[](1);
-        shape[0] = Range({tickLower: lower, tickUpper: upper, liquidity: liquidity});
-        _applyShape(CONTROL_SLEEVE, shape);
-        emit ShapeSet(CONTROL_SLEEVE, 1);
+            ZenithMath.fullRange(key.tickSpacing, sqrtPriceX96, sleeve.idle0, sleeve.idle1);
+        if (liquidity > 0) {
+            Range[] memory shape = new Range[](1);
+            shape[0] = Range({tickLower: lower, tickUpper: upper, liquidity: liquidity});
+            _applyShape(sleeveId, shape);
+            emit ShapeSet(sleeveId, 1);
+        }
+        if (sleeveId != CONTROL_SLEEVE) {
+            _requireSteadyPrice(); // never swap into a price someone has just pushed
+            (int256 delta0, int256 delta1) = ZenithMath.swapToBalance(poolManager, key, sleeve.idle0, sleeve.idle1);
+            _settleNet(key, sleeveId, delta0, delta1, 0, 0);
+        }
     }
 
     /// @dev Turns the sleeve's net delta into claims: a surplus is minted to the hook as claims, a shortfall is

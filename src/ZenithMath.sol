@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 
 /// @title ZenithMath
 /// @notice Position valuation for ZenithHook, deployed as a separate library so the hook stays under the 24 KB
 /// contract size limit.
 library ZenithMath {
+    using StateLibrary for IPoolManager;
+
     /// @notice Tokens in a position of `liquidity` between two ticks at the given price, rounded down.
     function amounts(int24 tickLower, int24 tickUpper, uint128 liquidity, uint160 sqrtPriceX96)
         external
@@ -63,5 +70,33 @@ library ZenithMath {
         // Rounding the amounts up can never exceed the maxima, because shares were rounded down from them.
         amount0 = FullMath.mulDivRoundingUp(shares, held0, supply);
         amount1 = FullMath.mulDivRoundingUp(shares, held1, supply);
+    }
+
+    /// @notice Swaps a sleeve's surplus token through the pool so both are worth the same at the current price, as a
+    /// full-range position needs them, and returns the PoolManager deltas for the hook to settle against the sleeve's
+    /// idle claims. Runs in the hook's context: external library functions are called by delegatecall, so the swap is
+    /// the hook's own, inside its unlock. Limited to 100 ticks (about 1%) of price movement, which bounds what a
+    /// sandwich could take; a sleeve too large for that is rebalanced over several steps.
+    function swapToBalance(IPoolManager manager, PoolKey memory key, uint256 amount0, uint256 amount1)
+        external
+        returns (int256 delta0, int256 delta1)
+    {
+        (uint160 sqrtPriceX96, int24 tick,,) = manager.getSlot0(key.toId());
+        uint256 value0 = FullMath.mulDiv(FullMath.mulDiv(amount0, sqrtPriceX96, 1 << 96), sqrtPriceX96, 1 << 96);
+        bool zeroForOne = value0 > amount1;
+        uint256 amountIn = zeroForOne
+            ? FullMath.mulDiv(FullMath.mulDiv(value0 - amount1, 1 << 96, sqrtPriceX96), 1 << 96, sqrtPriceX96) / 2
+            : (amount1 - value0) / 2;
+        if (amountIn == 0) return (0, 0);
+        BalanceDelta delta = manager.swap(
+            key,
+            SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: TickMath.getSqrtPriceAtTick(zeroForOne ? tick - 100 : tick + 100)
+            }),
+            ""
+        );
+        return (delta.amount0(), delta.amount1());
     }
 }

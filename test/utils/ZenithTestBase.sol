@@ -6,6 +6,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Position} from "@uniswap/v4-core/src/libraries/Position.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
@@ -67,10 +68,18 @@ abstract contract ZenithTestBase is Test, Deployers {
         return ZenithHook.Range({tickLower: tickLower, tickUpper: tickUpper, liquidity: liquidity});
     }
 
+    /// @dev A closed sleeve goes passive: one full-range position, as the control holds.
+    function _assertFullRange(uint256 sleeveId) internal view {
+        ZenithHook.Range[] memory ranges = hook.getRanges(sleeveId);
+        assertEq(ranges.length, 1, "one position");
+        assertEq(ranges[0].tickLower, TickMath.minUsableTick(key.tickSpacing), "full range, lower");
+        assertEq(ranges[0].tickUpper, TickMath.maxUsableTick(key.tickSpacing), "full range, upper");
+        _assertRangesMatchPool(sleeveId);
+    }
+
     /// @dev Liquidity Uniswap itself records for a sleeve's position (owner = hook, salt = sleeve id).
     function _positionLiquidity(uint256 sleeveId, int24 tickLower, int24 tickUpper) internal view returns (uint128) {
-        bytes32 positionKey =
-            Position.calculatePositionKey(address(hook), tickLower, tickUpper, hook.sleeveSalt(sleeveId));
+        bytes32 positionKey = Position.calculatePositionKey(address(hook), tickLower, tickUpper, bytes32(sleeveId)); // salt = sleeve id
         return manager.getPositionLiquidity(key.toId(), positionKey);
     }
 
